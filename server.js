@@ -93,7 +93,7 @@ function extractToolText(result) {
  * result. Throws with a clear message if the server or tool is unavailable.
  */
 async function searchCaseLaw(userPrompt) {
-	const transport = new StdioClientTransport({ command: MCP_CMD, args: MCP_ARGS });
+	const transport = new StdioClientTransport({ command: MCP_CMD, args: MCP_ARGS, stderr: 'inherit' });
 	const client = new Client(
 		{ name: 'onus-probandi-drafter', version: '1.0.0' },
 		{ capabilities: {} },
