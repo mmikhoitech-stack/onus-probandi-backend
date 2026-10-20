@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"; // CHANGED THIS
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 dotenv.config();
 
@@ -12,7 +12,6 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-const MCP_GATEWAY_URL = "https://gateway.ansvar.eu/mcp"; // CHANGED BACK TO /mcp
 
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'Server is running' });
@@ -24,14 +23,17 @@ app.post('/api/draft', async (req, res) => {
     if (!DEEPSEEK_API_KEY) return res.status(500).json({ error: 'DEEPSEEK_API_KEY is not configured.' });
 
     try {
-        console.log(`Connecting to MCP Gateway to retrieve cases...`);
+        console.log(`Starting local MCP server for: "${prompt}"`);
         
-        // 1. Connect using Streamable HTTP
-        const transport = new StreamableHTTPClientTransport(new URL(MCP_GATEWAY_URL));
+        // 1. Run the local Ansvar package using npx (Stdio transport)
+        const transport = new StdioClientTransport({
+            command: "npx",
+            args: ["-y", "@ansvar/southafrica-law-mcp"]
+        });
+        
         const mcpClient = new Client({ name: "onus-probandi-backend", version: "1.0.0" }, { capabilities: {} });
-        
         await mcpClient.connect(transport);
-        console.log("Successfully connected to MCP Gateway.");
+        console.log("Successfully connected to local MCP server.");
 
         // 2. Call the search tool
         const toolResult = await mcpClient.callTool({
