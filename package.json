@@ -8,7 +8,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@ansvar/southafrica-law-mcp": "github:Ansvar-Systems/southafrica-law-mcp",
+    "@ansvar/southafrica-law-mcp": "https://github.com/Ansvar-Systems/southafrica-law-mcp.git",
     "@modelcontextprotocol/sdk": "^1.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
