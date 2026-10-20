@@ -1,1 +1,16 @@
-"@ansvar/southafrica-law-mcp": "https://github.com/YOUR_GITHUB_USERNAME/southafrica-law-mcp.git"
+{
+  "name": "onus-probandi-backend",
+  "version": "1.0.0",
+  "description": "Onus Probandi Backend",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
