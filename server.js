@@ -25,10 +25,10 @@ app.post('/api/draft', async (req, res) => {
     try {
         console.log(`Starting local MCP server for: "${prompt}"`);
         
-        // We use npx but point it to the package we installed in package.json
+        // Use npx to pull directly from GitHub
         const transport = new StdioClientTransport({
             command: "npx",
-            args: ["-y", "@ansvar/southafrica-law-mcp"]
+            args: ["-y", "github:Ansvar-Systems/southafrica-law-mcp"]
         });
         
         const mcpClient = new Client({ name: "onus-probandi-backend", version: "1.0.0" }, { capabilities: {} });
