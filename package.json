@@ -5,7 +5,6 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "preinstall": "git config --global url.\"https://github.com/\".insteadOf \"ssh://git@github.com/\" && git config --global url.\"https://github.com/\".insteadOf \"git@github.com:\"",
     "start": "node server.js"
   },
   "dependencies": {
@@ -14,5 +13,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2"
+  },
+  "overrides": {
+    "@ansvar/southafrica-law-mcp": "https://github.com/Ansvar-Systems/southafrica-law-mcp.git"
   }
 }
