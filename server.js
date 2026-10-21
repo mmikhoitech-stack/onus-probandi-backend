@@ -18,7 +18,6 @@ app.get('/api/health', (req, res) => {
 });
 
 app.post('/api/draft', async (req, res) => {
-    // We now expect agentType from the frontend
     const { prompt, agentType } = req.body; 
     
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
@@ -27,9 +26,10 @@ app.post('/api/draft', async (req, res) => {
     try {
         console.log(`Running agent: ${agentType || 'default'} for: "${prompt}"`);
         
+        // Use node to run the installed package instead of npx
         const transport = new StdioClientTransport({
-            command: "npx",
-            args: ["-y", "github:Ansvar-Systems/southafrica-law-mcp"]
+            command: "node",
+            args: ["./node_modules/@ansvar/southafrica-law-mcp/dist/index.js"]
         });
         
         const mcpClient = new Client({ name: "onus-probandi-backend", version: "1.0.0" }, { capabilities: {} });
@@ -46,7 +46,6 @@ app.post('/api/draft', async (req, res) => {
         const retrievedCases = toolResult.content.map(c => c.text).join("\n\n");
         console.log("Successfully retrieved cases.");
 
-        // Dynamic system prompts based on agent type
         let systemPrompt = "You are a South African legal AI. Draft documents based ONLY on the provided case law context.";
 
         if (agentType === 'litigation') {
