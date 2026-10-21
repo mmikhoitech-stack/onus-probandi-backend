@@ -26,10 +26,10 @@ app.post('/api/draft', async (req, res) => {
     try {
         console.log(`Running agent: ${agentType || 'default'} for: "${prompt}"`);
         
-        // Use node to run the installed package instead of npx
+        // Use npm exec to run the installed package reliably
         const transport = new StdioClientTransport({
-            command: "node",
-            args: ["./node_modules/@ansvar/southafrica-law-mcp/dist/index.js"]
+            command: "npm",
+            args: ["exec", "--", "@ansvar/southafrica-law-mcp"]
         });
         
         const mcpClient = new Client({ name: "onus-probandi-backend", version: "1.0.0" }, { capabilities: {} });
