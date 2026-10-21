@@ -5,8 +5,7 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "build:mcp": "git clone https://github.com/Ansvar-Systems/southafrica-law-mcp.git mcp-source && cd mcp-source && npm install && npm run build && npm run build:db"
+    "start": "node server.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.1",
