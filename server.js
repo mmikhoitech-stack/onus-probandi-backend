@@ -1,8 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 dotenv.config();
 
@@ -24,36 +22,16 @@ app.post('/api/draft', async (req, res) => {
     if (!DEEPSEEK_API_KEY) return res.status(500).json({ error: 'DEEPSEEK_API_KEY is not configured.' });
 
     try {
-        console.log(`Running agent: ${agentType || 'default'} for: "${prompt}"`);
+        console.log(`Drafting document using DeepSeek for agent: ${agentType}`);
         
-        // Use the locally built MCP server from the cloned source
-        const transport = new StdioClientTransport({
-            command: "node",
-            args: ["./mcp-source/dist/index.js"]
-        });
-        
-        const mcpClient = new Client({ name: "onus-probandi-backend", version: "1.0.0" }, { capabilities: {} });
-        await mcpClient.connect(transport);
-        console.log("Successfully connected to local MCP server.");
-
-        const toolResult = await mcpClient.callTool({
-            name: "search_case_law", 
-            arguments: { query: prompt, limit: 3 }
-        });
-
-        await mcpClient.close();
-
-        const retrievedCases = toolResult.content.map(c => c.text).join("\n\n");
-        console.log("Successfully retrieved cases.");
-
-        let systemPrompt = "You are a South African legal AI. Draft documents based ONLY on the provided case law context.";
+        let systemPrompt = "You are an expert South African legal AI. Draft highly professional legal documents, using correct South African legal formatting and citing relevant case law where applicable.";
 
         if (agentType === 'litigation') {
-            systemPrompt = "You are an expert South African litigator. Draft a formal legal document (like an affidavit or pleading) based on the user's facts. Cite the provided case law accurately.";
+            systemPrompt = "You are an expert South African litigator. Draft a formal legal document (like an affidavit or pleading) based on the user's facts. Cite relevant South African case law accurately.";
         } else if (agentType === 'research') {
-            systemPrompt = "You are a South African legal researcher. Summarize the provided case law clearly. Explain how these cases apply to the user's legal question.";
+            systemPrompt = "You are a South African legal researcher. Summarize the relevant case law clearly. Explain how these cases apply to the user's legal question.";
         } else if (agentType === 'review') {
-            systemPrompt = "You are a senior South African attorney. Review the user's clause or text against the provided case law. Highlight any risks, missing elements, or legal issues.";
+            systemPrompt = "You are a senior South African attorney. Review the user's clause or text. Highlight any risks, missing elements, or legal issues based on South African law.";
         }
 
         const deepseekResponse = await fetch('https://api.deepseek.com/chat/completions', {
@@ -63,7 +41,7 @@ app.post('/api/draft', async (req, res) => {
                 model: "deepseek-chat",
                 messages: [
                     { role: "system", content: systemPrompt }, 
-                    { role: "user", content: `Case law context:\n\n${retrievedCases}\n\nUser Input: ${prompt}` }
+                    { role: "user", content: prompt }
                 ]
             })
         });
@@ -73,11 +51,16 @@ app.post('/api/draft', async (req, res) => {
         const deepseekData = await deepseekResponse.json();
         const draftedDocument = deepseekData.choices[0].message.content;
 
-        res.json({ success: true, cases_retrieved: retrievedCases, draft: draftedDocument });
+        // We send back a fake "cases_retrieved" string so your frontend doesn't break
+        res.json({ 
+            success: true, 
+            cases_retrieved: "DeepSeek internal knowledge base used for this draft. (External SAFLII database currently bypassed).", 
+            draft: draftedDocument 
+        });
 
     } catch (error) {
         console.error("Pipeline Error:", error);
-        res.status(500).json({ error: "Failed to retrieve verified case law.", details: error.message });
+        res.status(500).json({ error: "Failed to draft document.", details: error.message });
     }
 });
 
