@@ -26,10 +26,10 @@ app.post('/api/draft', async (req, res) => {
     try {
         console.log(`Running agent: ${agentType || 'default'} for: "${prompt}"`);
         
-        // Use npm exec to run the installed package reliably
+        // Use the locally built MCP server from the cloned source
         const transport = new StdioClientTransport({
-            command: "npm",
-            args: ["exec", "--", "@ansvar/southafrica-law-mcp"]
+            command: "node",
+            args: ["./mcp-source/dist/index.js"]
         });
         
         const mcpClient = new Client({ name: "onus-probandi-backend", version: "1.0.0" }, { capabilities: {} });
