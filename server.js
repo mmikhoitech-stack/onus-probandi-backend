@@ -1,8 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { Client } from 'pg';
-import { gotScraping } from 'got-scraping'; // NEW STEALTH SCRAPER
+import pg from 'pg';
+import { gotScraping } from 'got-scraping';
 import * as cheerio from 'cheerio';
 import { OpenAI } from 'openai';
 
@@ -15,19 +15,22 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
-// Initialize DB and OpenAI
-const db = new Client({
+// Use a Connection Pool to prevent "Client already connected" errors
+const { Pool } = pg;
+const db = new Pool({
   connectionString: process.env.DATABASE_URL, 
   ssl: { rejectUnauthorized: false }
 });
+
+// We keep OpenAI initialized in case you want to switch it back on later
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// --- INGESTION LOGIC (Using got-scraping to bypass 403) ---
+// --- INGESTION LOGIC ---
 async function ingestCase(url) {
   try {
     console.log(`Fetching: ${url}`);
     
-    // gotScraping automatically mimics a real browser's TLS fingerprint and headers
+    // gotScraping mimics a real browser to bypass SAFLII's 403 blocks
     const response = await gotScraping(url);
     
     const $ = cheerio.load(response.body);
@@ -36,11 +39,23 @@ async function ingestCase(url) {
 
     for (const chunk of chunks) {
       if (chunk.trim().length < 50) continue;
+      
+      // --- OPENAI BYPASS ACTIVE ---
+      // Instead of calling OpenAI (which is failing due to billing), 
+      // we generate a fake 1536-dimension vector of zeros.
+      console.log("Bypassing OpenAI. Generating dummy vector...");
+      const embedding = new Array(1536).fill(0); 
+      
+      // If you want to switch back to OpenAI later, delete the two lines above 
+      // and uncomment the three lines below:
+      /*
       const embeddingResponse = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: chunk,
       });
       const embedding = embeddingResponse.data[0].embedding;
+      */
+
       await db.query(
         `INSERT INTO case_law_chunks (case_url, chunk_text, embedding) VALUES ($1, $2, $3)`,
         [url, chunk, JSON.stringify(embedding)]
@@ -60,7 +75,6 @@ app.get('/api/health', (req, res) => {
 // Trigger Ingestion Route
 app.get('/api/ingest', async (req, res) => {
   try {
-    await db.connect();
     await db.query('CREATE EXTENSION IF NOT EXISTS vector;');
     await db.query(`
       CREATE TABLE IF NOT EXISTS case_law_chunks (
@@ -70,9 +84,9 @@ app.get('/api/ingest', async (req, res) => {
         embedding vector(1536)
       );
     `);
+    
     res.send("Ingestion started! Check the Render logs to see the progress.");
     
-    // Run in background
     ingestCase('https://www.saflii.org/za/cases/ZACC/2023/12.html').then(() => {
       console.log('Background ingestion complete.');
     });
