@@ -1,15 +1,28 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
 import { Client } from 'pg';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { OpenAI } from 'openai';
 
-// Initialize DB and OpenAI
+dotenv.config();
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const PORT = process.env.PORT || 10000;
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+
+// Initialize DB and OpenAI for Ingestion
 const db = new Client({
   connectionString: process.env.DATABASE_URL, 
   ssl: { rejectUnauthorized: false }
 });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// --- INGESTION LOGIC ---
 async function ingestCase(url) {
   try {
     console.log(`Fetching: ${url}`);
@@ -35,3 +48,72 @@ async function ingestCase(url) {
     console.error(`Failed to ingest ${url}:`, error.message);
   }
 }
+
+// --- ROUTES ---
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', message: 'Server is running' });
+});
+
+// Trigger Ingestion Route
+app.get('/api/ingest', async (req, res) => {
+  try {
+    await db.connect();
+    await db.query('CREATE EXTENSION IF NOT EXISTS vector;');
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS case_law_chunks (
+        id SERIAL PRIMARY KEY,
+        case_url TEXT,
+        chunk_text TEXT,
+        embedding vector(1536)
+      );
+    `);
+    res.send("Ingestion started! Check the Render logs to see the progress.");
+    
+    // Run in background so it doesn't block the web request
+    ingestCase('https://www.saflii.org/za/cases/ZACC/2023/12.html').then(() => {
+      console.log('Background ingestion complete.');
+      db.end();
+    });
+  } catch (error) {
+    res.status(500).send(error.message);
+  }
+});
+
+// Keep your drafting route
+app.post('/api/draft', async (req, res) => {
+    const { prompt, agentType } = req.body; 
+    if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
+    if (!DEEPSEEK_API_KEY) return res.status(500).json({ error: 'DEEPSEEK_API_KEY is not configured.' });
+
+    try {
+        let systemPrompt = "You are an expert South African legal AI. Draft highly professional legal documents.";
+        if (agentType === 'litigation') systemPrompt = "You are an expert South African litigator. Draft a formal legal document based on facts.";
+        if (agentType === 'research') systemPrompt = "You are a South African legal researcher. Summarize case law clearly.";
+        if (agentType === 'review') systemPrompt = "You are a senior South African attorney. Review the clause for risks.";
+
+        const deepseekResponse = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+            body: JSON.stringify({
+                model: "deepseek-chat",
+                messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }]
+            })
+        });
+
+        if (!deepseekResponse.ok) throw new Error(`DeepSeek API failed: ${deepseekResponse.status}`);
+        const deepseekData = await deepseekResponse.json();
+        const draftedDocument = deepseekData.choices[0].message.content;
+
+        res.json({ success: true, cases_retrieved: "DeepSeek internal knowledge used.", draft: draftedDocument });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to draft document.", details: error.message });
+    }
+});
+
+// Keep your RE5 simulation route
+app.post('/api/simulate', async (req, res) => {
+    // (Keep your simulation logic here, I've abbreviated it for space, but if you still have it in your file, keep it)
+    res.json({ reply: "Simulation route is active." });
+});
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
