@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { Client } from 'pg';
-import axios from 'axios';
+import { gotScraping } from 'got-scraping'; // NEW STEALTH SCRAPER
 import * as cheerio from 'cheerio';
 import { OpenAI } from 'openai';
 
@@ -22,20 +22,15 @@ const db = new Client({
 });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// --- INGESTION LOGIC ---
+// --- INGESTION LOGIC (Using got-scraping to bypass 403) ---
 async function ingestCase(url) {
   try {
     console.log(`Fetching: ${url}`);
-    // ADDED USER-AGENT HEADERS TO BYPASS SAFLII 403 ERROR
-    const response = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5'
-      }
-    });
     
-    const $ = cheerio.load(response.data);
+    // gotScraping automatically mimics a real browser's TLS fingerprint and headers
+    const response = await gotScraping(url);
+    
+    const $ = cheerio.load(response.body);
     const text = $('body').text().replace(/\s+/g, ' ').trim();
     const chunks = text.match(/[\s\S]{1,1000}/g) || [text]; 
 
@@ -80,7 +75,6 @@ app.get('/api/ingest', async (req, res) => {
     // Run in background
     ingestCase('https://www.saflii.org/za/cases/ZACC/2023/12.html').then(() => {
       console.log('Background ingestion complete.');
-      // Do not call db.end() here so the server stays alive
     });
   } catch (error) {
     res.status(500).send(error.message);
