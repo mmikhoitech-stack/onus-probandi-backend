@@ -15,7 +15,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
-// Initialize DB and OpenAI for Ingestion
+// Initialize DB and OpenAI
 const db = new Client({
   connectionString: process.env.DATABASE_URL, 
   ssl: { rejectUnauthorized: false }
@@ -26,7 +26,15 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 async function ingestCase(url) {
   try {
     console.log(`Fetching: ${url}`);
-    const response = await axios.get(url);
+    // ADDED USER-AGENT HEADERS TO BYPASS SAFLII 403 ERROR
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5'
+      }
+    });
+    
     const $ = cheerio.load(response.data);
     const text = $('body').text().replace(/\s+/g, ' ').trim();
     const chunks = text.match(/[\s\S]{1,1000}/g) || [text]; 
@@ -69,17 +77,17 @@ app.get('/api/ingest', async (req, res) => {
     `);
     res.send("Ingestion started! Check the Render logs to see the progress.");
     
-    // Run in background so it doesn't block the web request
+    // Run in background
     ingestCase('https://www.saflii.org/za/cases/ZACC/2023/12.html').then(() => {
       console.log('Background ingestion complete.');
-      db.end();
+      // Do not call db.end() here so the server stays alive
     });
   } catch (error) {
     res.status(500).send(error.message);
   }
 });
 
-// Keep your drafting route
+// Drafting Route (Onus Probandi)
 app.post('/api/draft', async (req, res) => {
     const { prompt, agentType } = req.body; 
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
@@ -110,10 +118,31 @@ app.post('/api/draft', async (req, res) => {
     }
 });
 
-// Keep your RE5 simulation route
+// Ludus Simulation Route
 app.post('/api/simulate', async (req, res) => {
-    // (Keep your simulation logic here, I've abbreviated it for space, but if you still have it in your file, keep it)
-    res.json({ reply: "Simulation route is active." });
+    const { profession, scenarioType, message } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message is required' });
+    if (!DEEPSEEK_API_KEY) return res.status(500).json({ error: 'DEEPSEEK_API_KEY is missing.' });
+
+    try {
+        let systemPrompt = `You are an AI client in a professional simulation for the field of: ${profession}. Scenario: ${scenarioType}. Respond realistically.`;
+        systemPrompt += " \n\nAt the very end, add: '--- EXAMINER NOTE: [Score out of 10 and explain why based on industry standards]'.";
+
+        const deepseekResponse = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+            body: JSON.stringify({
+                model: "deepseek-chat",
+                messages: [{ role: "system", content: systemPrompt }, { role: "user", content: message }]
+            })
+        });
+
+        if (!deepseekResponse.ok) throw new Error(`DeepSeek API failed: ${deepseekResponse.status}`);
+        const deepseekData = await deepseekResponse.json();
+        res.json({ reply: deepseekData.choices[0].message.content });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to simulate scenario.", details: error.message });
+    }
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
