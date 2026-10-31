@@ -56,7 +56,7 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'Server is running' });
 });
 
-// Trigger Ingestion Route
+// BATCH Trigger Ingestion Route
 app.get('/api/ingest', async (req, res) => {
   try {
     await db.query('CREATE EXTENSION IF NOT EXISTS vector;');
@@ -69,13 +69,25 @@ app.get('/api/ingest', async (req, res) => {
       );
     `);
     
-    res.send("Ingestion started! Check the Render logs to see the progress.");
+    res.send("Law Library Batch Ingestion started! Check the Render logs.");
     
-    ingestCase('https://www.saflii.org/za/cases/ZACC/2023/12.html').then(() => {
-      console.log('Background ingestion complete.');
-    });
+    const urlsToIngest = [
+      'https://www.saflii.org/za/cases/ZACC/1995/3.html',   // Makwanyane
+      'https://www.saflii.org/za/cases/ZACC/2001/6.html',   // Carmichele
+      'https://www.saflii.org/za/cases/ZACC/2007/13.html',  // Sidumo
+      'https://www.saflii.org/za/cases/ZASCA/2020/12.html', // SCA Case
+      'https://www.saflii.org/za/cases/ZALAC/2006/12.html'  // Labour Appeal Court
+    ];
+
+    for (const url of urlsToIngest) {
+      await ingestCase(url);
+      console.log("Sleeping for 5 seconds to respect SAFLII...");
+      await new Promise(r => setTimeout(r, 5000)); 
+    }
+    
+    console.log("Batch ingestion complete.");
   } catch (error) {
-    res.status(500).send(error.message);
+    console.error("Batch ingestion error:", error);
   }
 });
 
