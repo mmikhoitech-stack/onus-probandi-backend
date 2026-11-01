@@ -27,13 +27,12 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'Server is running' });
 });
 
-// --- 2. PERPLEXITY LIVE RESEARCH (NEW AGENT API) ---
+// --- 2. PERPLEXITY LIVE RESEARCH (AGENT API FIX) ---
 app.post('/api/live-research', async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'Query required' });
 
   try {
-    // NEW AGENT API ENDPOINT AND FORMAT
     const response = await fetch('https://api.perplexity.ai/v1/agent', {
       method: 'POST',
       headers: {
@@ -41,8 +40,9 @@ app.post('/api/live-research', async (req, res) => {
         'Authorization': `Bearer ${PERPLEXITY_API_KEY}`
       },
       body: JSON.stringify({
-        effort: "fast", 
-        input: query
+        model: "openai/gpt-5.6-sol", 
+        input: query,
+        tools: [{ type: "web_search" }] 
       })
     });
 
@@ -53,7 +53,6 @@ app.post('/api/live-research', async (req, res) => {
         throw new Error(data.error?.message || "Perplexity failed");
     }
     
-    // The new API returns the answer inside an output array
     const messageItem = data.output.find(item => item.type === 'message');
     const answer = messageItem ? messageItem.content[0].text : "No answer generated.";
     
@@ -64,7 +63,7 @@ app.post('/api/live-research', async (req, res) => {
   }
 });
 
-// --- 3. AI DRAFTING ---
+// --- 3. AI DRAFTING (ONUS PROBANDI) ---
 app.post('/api/draft', async (req, res) => {
     const { prompt, agentType } = req.body; 
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
@@ -89,7 +88,7 @@ app.post('/api/draft', async (req, res) => {
     }
 });
 
-// --- 4. DATABASE SEARCH ---
+// --- 4. DATABASE SEARCH (ONUS PROBANDI) ---
 app.post('/api/search', async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'Query required' });
