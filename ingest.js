@@ -1,33 +1,30 @@
-import { Client } from 'pg';
-import axios from 'axios';
+import pg from 'pg';
+import { gotScraping } from 'got-scraping';
 import * as cheerio from 'cheerio';
-import { OpenAI } from 'openai';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const db = new Client({
+const { Pool } = pg;
+const db = new Pool({
   connectionString: process.env.DATABASE_URL, 
   ssl: { rejectUnauthorized: false }
 });
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 async function ingestCase(url) {
   try {
     console.log(`Fetching: ${url}`);
-    const response = await axios.get(url);
-    const $ = cheerio.load(response.data);
+    const response = await gotScraping(url);
+    const $ = cheerio.load(response.body);
     const text = $('body').text().replace(/\s+/g, ' ').trim();
     const chunks = text.match(/[\s\S]{1,1000}/g) || [text]; 
 
     for (const chunk of chunks) {
       if (chunk.trim().length < 50) continue;
-      const embeddingResponse = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: chunk,
-      });
-      const embedding = embeddingResponse.data[0].embedding;
+      
+      // Dummy vector for now (to bypass OpenAI billing)
+      const embedding = new Array(1536).fill(0); 
+
       await db.query(
         `INSERT INTO case_law_chunks (case_url, chunk_text, embedding) VALUES ($1, $2, $3)`,
         [url, chunk, JSON.stringify(embedding)]
@@ -41,6 +38,7 @@ async function ingestCase(url) {
 
 async function main() {
   await db.connect();
+  
   await db.query('CREATE EXTENSION IF NOT EXISTS vector;');
   await db.query(`
     CREATE TABLE IF NOT EXISTS case_law_chunks (
@@ -50,8 +48,20 @@ async function main() {
       embedding vector(1536)
     );
   `);
-  console.log("Database ready. Starting scrape...");
-  await ingestCase('https://www.saflii.org/za/cases/ZACC/2023/12.html');
+
+  const urlsToIngest = [
+    'https://www.saflii.org/za/cases/ZACC/1995/3.html',   
+    'https://www.saflii.org/za/cases/ZACC/2001/6.html',   
+    'https://www.saflii.org/za/cases/ZACC/2007/13.html'  
+  ];
+
+  for (const url of urlsToIngest) {
+    await ingestCase(url);
+    console.log("Sleeping for 5 seconds...");
+    await new Promise(r => setTimeout(r, 5000)); 
+  }
+  
+  console.log("Batch ingestion complete.");
   await db.end();
 }
 
