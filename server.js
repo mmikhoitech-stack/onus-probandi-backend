@@ -67,18 +67,14 @@ app.post('/api/live-research', async (req, res) => {
   }
 });
 
-// --- 3. AI DRAFTING (Text Only) ---
+// --- 3. AI DRAFTING ---
 app.post('/api/draft', async (req, res) => {
-    const { prompt, agentType, firmVoice } = req.body; 
+    const { prompt, agentType } = req.body; 
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
     
     try {
         let systemPrompt = "You are an expert South African legal AI. Draft highly professional legal documents.";
         if (agentType === 'litigation') systemPrompt = "You are an expert South African litigator.";
-        
-        if (firmVoice === 'aggressive') systemPrompt += " Use a forceful, aggressive, and uncompromising tone.";
-        else if (firmVoice === 'conciliatory') systemPrompt += " Use a calm, conciliatory, and solution-oriented tone.";
-        else if (firmVoice === 'formal') systemPrompt += " Use highly formal, archaic High Court language.";
         
         const response = await fetch('https://api.deepseek.com/chat/completions', {
             method: 'POST',
@@ -96,57 +92,7 @@ app.post('/api/draft', async (req, res) => {
     }
 });
 
-// --- 4. UPLOAD DOCUMENT & DRAFT ---
-app.post('/api/upload-and-draft', upload.single('document'), async (req, res) => {
-    const { prompt, firmVoice } = req.body;
-    const file = req.file;
-
-    if (!file) return res.status(400).json({ error: 'No document uploaded.' });
-    if (!prompt) return res.status(400).json({ error: 'Instructions are required.' });
-
-    try {
-        let documentText = "";
-        const dataBuffer = fs.readFileSync(file.path);
-
-        // Extract text based on file type
-        if (file.mimetype === 'application/pdf') {
-            const pdfData = await pdf(dataBuffer);
-            documentText = pdfData.text;
-        } else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.endsWith('.docx')) {
-            const mammothResult = await mammoth.extractRawText({ buffer: dataBuffer });
-            documentText = mammothResult.value;
-        } else {
-            documentText = "Unsupported file format.";
-        }
-
-        fs.unlinkSync(file.path); // Clean up temp file
-
-        let systemPrompt = "You are a senior South African legal AI. Read the provided court document carefully and draft the requested response based on the facts within the document.";
-        if (firmVoice === 'aggressive') systemPrompt += " Use a forceful, aggressive, and uncompromising tone.";
-        else if (firmVoice === 'formal') systemPrompt += " Use highly formal, archaic High Court language.";
-
-        const response = await fetch('https://api.deepseek.com/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
-            body: JSON.stringify({
-                model: "deepseek-chat",
-                messages: [
-                    { role: "system", content: systemPrompt }, 
-                    { role: "user", content: `Here is the uploaded court document:\n\n${documentText}\n\n---\n\nMy instructions for drafting: ${prompt}` }
-                ]
-            })
-        });
-
-        const data = await response.json();
-        res.json({ success: true, draft: data.choices[0].message.content });
-
-    } catch (error) {
-        console.error("Upload Error:", error);
-        res.status(500).json({ error: "Failed to process document." });
-    }
-});
-
-// --- 5. DATABASE SEARCH ---
+// --- 4. DATABASE SEARCH ---
 app.post('/api/search', async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'Query required' });
@@ -161,7 +107,7 @@ app.post('/api/search', async (req, res) => {
   }
 });
 
-// --- 6. LUDUS SIMULATOR ---
+// --- 5. LUDUS SIMULATOR ---
 app.post('/api/simulate', async (req, res) => {
     const { profession, scenarioType, message } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
@@ -180,6 +126,57 @@ app.post('/api/simulate', async (req, res) => {
         res.json({ reply: data.choices[0].message.content });
     } catch (error) {
         res.status(500).json({ error: "Failed to simulate scenario." });
+    }
+});
+
+// --- 6. HARVEY-STYLE WORKFLOW (Bulk Upload) ---
+app.post('/api/workflow', upload.array('documents', 10), async (req, res) => {
+    const { prompt } = req.body;
+    const files = req.files;
+
+    if (!files || files.length === 0) return res.status(400).json({ error: 'No files uploaded.' });
+    if (!prompt) return res.status(400).json({ error: 'Prompt is required.' });
+
+    try {
+        let allDocumentsText = "";
+
+        for (const file of files) {
+            let text = "";
+            const dataBuffer = fs.readFileSync(file.path);
+
+            if (file.mimetype === 'application/pdf') {
+                const pdfData = await pdf(dataBuffer);
+                text = pdfData.text;
+            } else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.endsWith('.docx')) {
+                const mammothResult = await mammoth.extractRawText({ buffer: dataBuffer });
+                text = mammothResult.value;
+            } else {
+                text = "Unsupported file format.";
+            }
+
+            fs.unlinkSync(file.path);
+            allDocumentsText += `\n\n--- START OF DOCUMENT: ${file.originalname} ---\n${text}\n--- END OF DOCUMENT ---\n`;
+        }
+
+        const systemPrompt = `You are a senior South African attorney. You have been provided with the text of ${files.length} legal documents. Your task is: ${prompt}. Read the documents carefully. If asked to compare, create a structured summary or table. Cite the specific document names when making points.`;
+
+        const deepseekResponse = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+            body: JSON.stringify({
+                model: "deepseek-chat",
+                messages: [
+                    { role: "system", content: systemPrompt }, 
+                    { role: "user", content: `Here are the documents:\n\n${allDocumentsText}` }
+                ]
+            })
+        });
+
+        const data = await deepseekResponse.json();
+        res.json({ success: true, result: data.choices[0].message.content });
+
+    } catch (error) {
+        res.status(500).json({ error: "Failed to run workflow." });
     }
 });
 
