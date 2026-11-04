@@ -31,7 +31,7 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'Server is running' });
 });
 
-// --- 2. DEEPSEEK LIVE RESEARCH ---
+// --- 2. DEEPSEEK LIVE RESEARCH (Onus Probandi) ---
 app.post('/api/live-research', async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'Query required' });
@@ -67,7 +67,7 @@ app.post('/api/live-research', async (req, res) => {
   }
 });
 
-// --- 3. AI DRAFTING ---
+// --- 3. AI DRAFTING (Onus Probandi) ---
 app.post('/api/draft', async (req, res) => {
     const { prompt, agentType } = req.body; 
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
@@ -92,7 +92,7 @@ app.post('/api/draft', async (req, res) => {
     }
 });
 
-// --- 4. DATABASE SEARCH ---
+// --- 4. DATABASE SEARCH (Onus Probandi) ---
 app.post('/api/search', async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'Query required' });
@@ -107,7 +107,7 @@ app.post('/api/search', async (req, res) => {
   }
 });
 
-// --- 5. LUDUS SIMULATOR ---
+// --- 5. LUDUS SIMULATOR (Ludus) ---
 app.post('/api/simulate', async (req, res) => {
     const { profession, scenarioType, message } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
@@ -129,7 +129,7 @@ app.post('/api/simulate', async (req, res) => {
     }
 });
 
-// --- 6. HARVEY-STYLE WORKFLOW (Bulk Upload) ---
+// --- 6. HARVEY-STYLE WORKFLOW (Onus Probandi) ---
 app.post('/api/workflow', upload.array('documents', 10), async (req, res) => {
     const { prompt } = req.body;
     const files = req.files;
@@ -177,6 +177,60 @@ app.post('/api/workflow', upload.array('documents', 10), async (req, res) => {
 
     } catch (error) {
         res.status(500).json({ error: "Failed to run workflow." });
+    }
+});
+
+// --- 7. LUDUS AI LECTURER (New) ---
+app.post('/api/ludus/lecture', upload.single('document'), async (req, res) => {
+    const { question } = req.body;
+    const file = req.file;
+
+    if (!file) return res.status(400).json({ error: 'Please upload a study guide.' });
+    if (!question) return res.status(400).json({ error: 'Please ask a question.' });
+
+    try {
+        let extractedText = "";
+        const dataBuffer = fs.readFileSync(file.path);
+
+        if (file.mimetype === 'application/pdf') {
+            const pdfData = await pdf(dataBuffer);
+            extractedText = pdfData.text;
+        } else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.endsWith('.docx')) {
+            const mammothResult = await mammoth.extractRawText({ buffer: dataBuffer });
+            extractedText = mammothResult.value;
+        } else {
+            extractedText = "Unsupported format.";
+        }
+
+        fs.unlinkSync(file.path);
+
+        const systemPrompt = `You are a highly experienced South African Law Professor. 
+        You are teaching a student using the following study material:\n\n${extractedText}\n\n
+        You must teach the student based ONLY on this material. 
+        Format your response as a structured lecture: 
+        1. Introduction (Briefly explain the topic)
+        2. Main Principles (Break down the law clearly)
+        3. Case Law Examples (If any are in the text)
+        4. Exam Tip (How to answer this in an exam).
+        Be authoritative, clear, and thorough.`;
+
+        const deepseekResponse = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+            body: JSON.stringify({
+                model: "deepseek-chat",
+                messages: [
+                    { role: "system", content: systemPrompt }, 
+                    { role: "user", content: question }
+                ]
+            })
+        });
+
+        const data = await deepseekResponse.json();
+        res.json({ lecture: data.choices[0].message.content });
+
+    } catch (error) {
+        res.status(500).json({ error: "Lecture failed to generate." });
     }
 });
 
