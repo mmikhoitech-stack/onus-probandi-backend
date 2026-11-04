@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -107,7 +108,7 @@ app.post('/api/search', async (req, res) => {
   }
 });
 
-// --- 5. LUDUS SIMULATOR (Ludus) ---
+// --- 5. LUDUS SIMULATOR ---
 app.post('/api/simulate', async (req, res) => {
     const { profession, scenarioType, message } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
@@ -180,37 +181,44 @@ app.post('/api/workflow', upload.array('documents', 10), async (req, res) => {
     }
 });
 
-// --- 7. LUDUS AI LECTURER (New) ---
-app.post('/api/ludus/lecture', upload.single('document'), async (req, res) => {
+// --- 7. LUDUS AI LECTURER (Multiple Files & Past Papers) ---
+app.post('/api/ludus/lecture', upload.array('documents', 5), async (req, res) => {
     const { question } = req.body;
-    const file = req.file;
+    const files = req.files;
 
-    if (!file) return res.status(400).json({ error: 'Please upload a study guide.' });
+    if (!files || files.length === 0) return res.status(400).json({ error: 'Please upload a study guide or past paper.' });
     if (!question) return res.status(400).json({ error: 'Please ask a question.' });
 
     try {
-        let extractedText = "";
-        const dataBuffer = fs.readFileSync(file.path);
+        let allExtractedText = "";
 
-        if (file.mimetype === 'application/pdf') {
-            const pdfData = await pdf(dataBuffer);
-            extractedText = pdfData.text;
-        } else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.endsWith('.docx')) {
-            const mammothResult = await mammoth.extractRawText({ buffer: dataBuffer });
-            extractedText = mammothResult.value;
-        } else {
-            extractedText = "Unsupported format.";
+        // Loop through all uploaded files (Study Guide + Past Papers)
+        for (const file of files) {
+            let extractedText = "";
+            const dataBuffer = fs.readFileSync(file.path);
+
+            if (file.mimetype === 'application/pdf') {
+                const pdfData = await pdf(dataBuffer);
+                extractedText = pdfData.text;
+            } else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.endsWith('.docx')) {
+                const mammothResult = await mammoth.extractRawText({ buffer: dataBuffer });
+                extractedText = mammothResult.value;
+            } else {
+                extractedText = "Unsupported format.";
+            }
+
+            fs.unlinkSync(file.path);
+            allExtractedText += `\n\n--- START OF DOCUMENT: ${file.originalname} ---\n${extractedText}\n--- END OF DOCUMENT ---\n`;
         }
 
-        fs.unlinkSync(file.path);
-
         const systemPrompt = `You are a highly experienced South African Law Professor. 
-        You are teaching a student using the following study material:\n\n${extractedText}\n\n
+        You are teaching a student using the following study material and past exam papers:\n\n${allExtractedText}\n\n
         You must teach the student based ONLY on this material. 
+        If past papers are included, analyze the patterns and tell the student what to expect.
         Format your response as a structured lecture: 
         1. Introduction (Briefly explain the topic)
         2. Main Principles (Break down the law clearly)
-        3. Case Law Examples (If any are in the text)
+        3. Past Paper Analysis (If past papers are uploaded, highlight recurring questions)
         4. Exam Tip (How to answer this in an exam).
         Be authoritative, clear, and thorough.`;
 
