@@ -17,8 +17,14 @@ const PORT = process.env.PORT || 10000;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
 // Setup Multer for file uploads
-const upload = multer({ dest: 'uploads/' });
-const memoryUpload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ 
+    dest: 'uploads/',
+    limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+});
+const memoryUpload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+});
 
 // Database Connection
 const { Pool } = pg;
@@ -68,10 +74,9 @@ app.post('/api/live-research', async (req, res) => {
   }
 });
 
-// --- 3. AI DRAFTING (Updated for Document Uploads) ---
+// --- 3. AI DRAFTING (With Harvey Firm Voice Memory) ---
 app.post('/api/draft', memoryUpload.any(), async (req, res) => {
-    const { prompt, agentType } = req.body; 
-    // Check if a file was uploaded
+    const { prompt, agentType, firmVoice } = req.body; 
     const file = req.files && req.files.length > 0 ? req.files[0] : null;
     
     if (!prompt && !file) return res.status(400).json({ error: 'Prompt or file is required' });
@@ -79,7 +84,6 @@ app.post('/api/draft', memoryUpload.any(), async (req, res) => {
     try {
         let extractedText = "";
         
-        // If a file was uploaded, extract its text
         if (file) {
             if (file.mimetype === 'application/pdf') {
                 const pdfData = await pdf(file.buffer);
@@ -90,10 +94,22 @@ app.post('/api/draft', memoryUpload.any(), async (req, res) => {
             }
         }
 
+        // Build the base system prompt
         let systemPrompt = "You are an expert South African legal AI. Draft highly professional legal documents.";
-        if (agentType === 'litigation') systemPrompt = "You are an expert South African litigator.";
         
-        // Combine the uploaded document text with the user's prompt
+        // Add Agent Type specifics
+        if (agentType === 'litigation') systemPrompt = "You are an expert South African litigator.";
+        if (agentType === 'research') systemPrompt = "You are a South African legal researcher.";
+        
+        // HARVEY MAGIC: THE FIRM VOICE
+        if (firmVoice === 'aggressive') {
+            systemPrompt += " Use a forceful, aggressive, and uncompromising tone. Emphasize the opponent's faults and demand strict compliance.";
+        } else if (firmVoice === 'conciliatory') {
+            systemPrompt += " Use a calm, conciliatory, and solution-oriented tone. Aim for settlement and cooperation.";
+        } else if (firmVoice === 'formal') {
+            systemPrompt += " Use highly formal, archaic High Court language (e.g., 'Hereinbefore', 'Whereas', 'The Honourable Court').";
+        }
+        
         const userContent = file 
             ? `Here is the document text:\n\n${extractedText}\n\nBased on this document, please do the following: ${prompt}`
             : prompt;
@@ -200,6 +216,59 @@ app.post('/api/ludus/lecture', memoryUpload.any(), async (req, res) => {
     } catch (error) {
         console.error("Lecture Error:", error); 
         res.status(500).json({ error: error.message || "Lecture failed to generate." });
+    }
+});
+
+// --- 7. HARVEY-STYLE WORKFLOW (Review Table Generation) ---
+app.post('/api/workflow', upload.array('documents', 10), async (req, res) => {
+    const { prompt } = req.body;
+    const files = req.files;
+
+    if (!files || files.length === 0) return res.status(400).json({ error: 'No files uploaded.' });
+    if (!prompt) return res.status(400).json({ error: 'Prompt is required.' });
+
+    try {
+        let allDocumentsText = "";
+
+        for (const file of files) {
+            let text = "";
+            const dataBuffer = fs.readFileSync(file.path);
+
+            if (file.mimetype === 'application/pdf') {
+                const pdfData = await pdf(dataBuffer);
+                text = pdfData.text;
+            } else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.endsWith('.docx')) {
+                const mammothResult = await mammoth.extractRawText({ buffer: dataBuffer });
+                text = mammothResult.value;
+            } else {
+                text = "Unsupported file format.";
+            }
+
+            fs.unlinkSync(file.path);
+            allDocumentsText += `\n\n--- START OF DOCUMENT: ${file.originalname} ---\n${text}\n--- END OF DOCUMENT ---\n`;
+        }
+
+        const systemPrompt = `You are a senior South African attorney. You have been provided with the text of ${files.length} legal documents. 
+        Your task is: ${prompt}. 
+        Read the documents carefully. If asked to compare, ALWAYS create a structured Markdown Table. Cite the specific document names when making points.`;
+
+        const deepseekResponse = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+            body: JSON.stringify({
+                model: "deepseek-chat",
+                messages: [
+                    { role: "system", content: systemPrompt }, 
+                    { role: "user", content: `Here are the documents:\n\n${allDocumentsText}` }
+                ]
+            })
+        });
+
+        const data = await deepseekResponse.json();
+        res.json({ success: true, result: data.choices[0].message.content });
+
+    } catch (error) {
+        res.status(500).json({ error: "Failed to run workflow." });
     }
 });
 
