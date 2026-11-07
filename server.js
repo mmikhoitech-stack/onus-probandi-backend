@@ -1,5 +1,9 @@
 const express = require('express');
+const cors = require('cors'); 
 const app = express();
+
+// THIS FIXES THE "FAILED TO FETCH" ERROR
+app.use(cors()); 
 app.use(express.json());
 
 // --- YOUR API CONFIGURATION ---
