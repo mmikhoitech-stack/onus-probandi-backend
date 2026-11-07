@@ -16,9 +16,9 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
-// Setup Multer for file uploads
-const upload = multer({ dest: 'uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
-const memoryUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+// Setup Multer for file uploads (INCREASED TO 150MB)
+const upload = multer({ dest: 'uploads/', limits: { fileSize: 150 * 1024 * 1024 } });
+const memoryUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 150 * 1024 * 1024 } });
 
 // Database Connection
 const { Pool } = pg;
