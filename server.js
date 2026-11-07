@@ -16,15 +16,9 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
-// Setup Multer for file uploads
-const upload = multer({ 
-    dest: 'uploads/',
-    limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
-});
-const memoryUpload = multer({ 
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
-});
+// Setup Multer for file uploads (Accept up to 10 files at once, 50MB each)
+const upload = multer({ dest: 'uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
+const memoryUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // Database Connection
 const { Pool } = pg;
@@ -74,43 +68,35 @@ app.post('/api/live-research', async (req, res) => {
   }
 });
 
-// --- 3. AI DRAFTING (With Harvey Firm Voice Memory) ---
+// --- 3. AI DRAFTING (Onus Probandi) ---
 app.post('/api/draft', memoryUpload.any(), async (req, res) => {
     const { prompt, agentType, firmVoice } = req.body; 
-    const file = req.files && req.files.length > 0 ? req.files[0] : null;
+    const files = req.files;
     
-    if (!prompt && !file) return res.status(400).json({ error: 'Prompt or file is required' });
+    if (!prompt && (!files || files.length === 0)) return res.status(400).json({ error: 'Prompt or file is required' });
     
     try {
         let extractedText = "";
-        
-        if (file) {
-            if (file.mimetype === 'application/pdf') {
-                const pdfData = await pdf(file.buffer);
-                extractedText = pdfData.text;
-            } else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.endsWith('.docx')) {
-                const mammothResult = await mammoth.extractRawText({ buffer: file.buffer });
-                extractedText = mammothResult.value;
+        if (files && files.length > 0) {
+            for (const file of files) {
+                if (file.mimetype === 'application/pdf') {
+                    const pdfData = await pdf(file.buffer);
+                    extractedText += pdfData.text + "\n\n";
+                } else if (file.originalname.endsWith('.docx')) {
+                    const mammothResult = await mammoth.extractRawText({ buffer: file.buffer });
+                    extractedText += mammothResult.value + "\n\n";
+                }
             }
         }
 
-        // Build the base system prompt
         let systemPrompt = "You are an expert South African legal AI. Draft highly professional legal documents.";
-        
-        // Add Agent Type specifics
         if (agentType === 'litigation') systemPrompt = "You are an expert South African litigator.";
-        if (agentType === 'research') systemPrompt = "You are a South African legal researcher.";
         
-        // HARVEY MAGIC: THE FIRM VOICE
-        if (firmVoice === 'aggressive') {
-            systemPrompt += " Use a forceful, aggressive, and uncompromising tone. Emphasize the opponent's faults and demand strict compliance.";
-        } else if (firmVoice === 'conciliatory') {
-            systemPrompt += " Use a calm, conciliatory, and solution-oriented tone. Aim for settlement and cooperation.";
-        } else if (firmVoice === 'formal') {
-            systemPrompt += " Use highly formal, archaic High Court language (e.g., 'Hereinbefore', 'Whereas', 'The Honourable Court').";
-        }
-        
-        const userContent = file 
+        if (firmVoice === 'aggressive') systemPrompt += " Use a forceful, aggressive, and uncompromising tone.";
+        else if (firmVoice === 'conciliatory') systemPrompt += " Use a calm, conciliatory, and solution-oriented tone.";
+        else if (firmVoice === 'formal') systemPrompt += " Use highly formal, archaic High Court language.";
+
+        const userContent = (files && files.length > 0)
             ? `Here is the document text:\n\n${extractedText}\n\nBased on this document, please do the following: ${prompt}`
             : prompt;
 
@@ -126,12 +112,11 @@ app.post('/api/draft', memoryUpload.any(), async (req, res) => {
         const data = await response.json();
         res.json({ success: true, draft: data.choices[0].message.content });
     } catch (error) {
-        console.error("Draft Error:", error);
         res.status(500).json({ error: "Failed to draft document." });
     }
 });
 
-// --- 4. DATABASE SEARCH ---
+// --- 4. DATABASE SEARCH (Onus Probandi) ---
 app.post('/api/search', async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'Query required' });
@@ -168,58 +153,7 @@ app.post('/api/simulate', async (req, res) => {
     }
 });
 
-// --- 6. LUDUS AI LECTURER ---
-app.post('/api/ludus/lecture', memoryUpload.any(), async (req, res) => {
-    const { question } = req.body;
-    const file = req.files && req.files.length > 0 ? req.files[0] : null;
-
-    if (!file) return res.status(400).json({ error: 'Please upload a study guide.' });
-    if (!question) return res.status(400).json({ error: 'Please ask a question.' });
-
-    try {
-        let extractedText = "";
-        if (file.mimetype === 'application/pdf') {
-            const pdfData = await pdf(file.buffer);
-            extractedText = pdfData.text;
-        } else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.endsWith('.docx')) {
-            const mammothResult = await mammoth.extractRawText({ buffer: file.buffer });
-            extractedText = mammothResult.value;
-        } else {
-            extractedText = "Unsupported format.";
-        }
-
-        const systemPrompt = `You are a highly experienced South African Law Professor. 
-        You are teaching a student using the following study material:\n\n${extractedText}\n\n
-        You must teach the student based ONLY on this material. 
-        Format your response as a structured lecture: 
-        1. Introduction (Briefly explain the topic)
-        2. Main Principles (Break down the law clearly)
-        3. Case Law Examples (If any are in the text)
-        4. Exam Tip (How to answer this in an exam).
-        Be authoritative, clear, and thorough.`;
-
-        const deepseekResponse = await fetch('https://api.deepseek.com/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
-            body: JSON.stringify({
-                model: "deepseek-chat",
-                messages: [
-                    { role: "system", content: systemPrompt }, 
-                    { role: "user", content: question }
-                ]
-            })
-        });
-
-        const data = await deepseekResponse.json();
-        res.json({ lecture: data.choices[0].message.content });
-
-    } catch (error) {
-        console.error("Lecture Error:", error); 
-        res.status(500).json({ error: error.message || "Lecture failed to generate." });
-    }
-});
-
-// --- 7. HARVEY-STYLE WORKFLOW (Review Table Generation) ---
+// --- 6. HARVEY-STYLE WORKFLOW (Review Table Generation) ---
 app.post('/api/workflow', upload.array('documents', 10), async (req, res) => {
     const { prompt } = req.body;
     const files = req.files;
@@ -237,7 +171,7 @@ app.post('/api/workflow', upload.array('documents', 10), async (req, res) => {
             if (file.mimetype === 'application/pdf') {
                 const pdfData = await pdf(dataBuffer);
                 text = pdfData.text;
-            } else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.endsWith('.docx')) {
+            } else if (file.originalname.endsWith('.docx')) {
                 const mammothResult = await mammoth.extractRawText({ buffer: dataBuffer });
                 text = mammothResult.value;
             } else {
@@ -248,9 +182,7 @@ app.post('/api/workflow', upload.array('documents', 10), async (req, res) => {
             allDocumentsText += `\n\n--- START OF DOCUMENT: ${file.originalname} ---\n${text}\n--- END OF DOCUMENT ---\n`;
         }
 
-        const systemPrompt = `You are a senior South African attorney. You have been provided with the text of ${files.length} legal documents. 
-        Your task is: ${prompt}. 
-        Read the documents carefully. If asked to compare, ALWAYS create a structured Markdown Table. Cite the specific document names when making points.`;
+        const systemPrompt = `You are a senior South African attorney. You have been provided with the text of ${files.length} legal documents. Your task is: ${prompt}. Read the documents carefully. If asked to compare, ALWAYS create a structured Markdown Table. Cite the specific document names when making points.`;
 
         const deepseekResponse = await fetch('https://api.deepseek.com/chat/completions', {
             method: 'POST',
@@ -269,6 +201,88 @@ app.post('/api/workflow', upload.array('documents', 10), async (req, res) => {
 
     } catch (error) {
         res.status(500).json({ error: "Failed to run workflow." });
+    }
+});
+
+// --- 7. LUDUS AI LECTURER (The "Audio Script" Master Prompt) ---
+app.post('/api/ludus/lecture', memoryUpload.any(), async (req, res) => {
+    const { question, chatHistory } = req.body;
+    const files = req.files;
+
+    try {
+        let extractedText = "";
+        
+        // Loop through all uploaded files (Study Guide + Past Papers)
+        if (files && files.length > 0) {
+            for (const file of files) {
+                let text = "";
+                if (file.mimetype === 'application/pdf') {
+                    const pdfData = await pdf(file.buffer);
+                    text = pdfData.text;
+                } else if (file.originalname.endsWith('.docx')) {
+                    const mammothResult = await mammoth.extractRawText({ buffer: file.buffer });
+                    text = mammothResult.value;
+                }
+                extractedText += `\n\n--- START OF DOCUMENT: ${file.originalname} ---\n${text}\n--- END OF DOCUMENT ---\n`;
+            }
+        }
+
+        // --- THE AUDIO-OPTIMIZED SYSTEM PROMPT ---
+        const systemPrompt = `ROLE AND PERSONA:
+        You are a Senior Law Professor and Bar Exam Coach in South African law. Your goal is to teach a student HOW to think about legal problems.
+
+        CRITICAL INSTRUCTION FOR AUDIO OUTPUT: 
+        You are generating a script that will be read out loud by a Text-to-Speech engine. 
+        - DO NOT use any Markdown formatting (No asterisks **, No hashtags ###, No dashes ---, No bullet points). 
+        - Write in clear, flowing paragraphs as if you are speaking directly to the student in a lecture hall.
+        - Instead of saying "First", "Second", "Third", use natural spoken transitions like "Let's start with...", "Moving on to...", "Finally, we must consider...".
+
+        CONTEXT AND STUDENT PROFILE:
+        The user is an LLB student studying the provided materials. They do not have the physical textbook, so you must explicitly bridge the gap by providing the common-law rules, relevant case law, and the constitutional implications.
+
+        THE "TEXTBOOK + CASE LAW + CONSTITUTION" OVERLAY:
+        When explaining any concept, build the answer in three distinct layers:
+        1. The Common Law Rule.
+        2. The Case Law (cite the case and its ratio decidendi).
+        3. The Constitutional Overlay (Section 39(2), Ubuntu, public policy).
+
+        SOCRATIC FEEDBACK METHODOLOGY:
+        When the student gets a question wrong, do not just tell them the answer.
+        1. Diagnose the Error (Conceptual, Recall, Application, or Jurisdiction).
+        2. Acknowledge what they got right.
+        3. Teach from First Principles.
+        4. End with a Socratic follow-up question.
+
+        STUDY MATERIALS PROVIDED:
+        \n\n${extractedText}\n\n
+
+        TONE: 
+        Structured, professional, encouraging, and conversational.`;
+
+        let messages = [{ role: "system", content: systemPrompt }];
+        
+        if (chatHistory) {
+            const parsedHistory = JSON.parse(chatHistory);
+            messages = messages.concat(parsedHistory);
+        }
+        
+        messages.push({ role: "user", content: question });
+
+        const deepseekResponse = await fetch('https://api.deepseek.com/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+            body: JSON.stringify({
+                model: "deepseek-chat",
+                messages: messages
+            })
+        });
+
+        const data = await deepseekResponse.json();
+        res.json({ lecture: data.choices[0].message.content });
+
+    } catch (error) {
+        console.error("Lecture Error:", error); 
+        res.status(500).json({ error: error.message || "Lecture failed to generate." });
     }
 });
 
