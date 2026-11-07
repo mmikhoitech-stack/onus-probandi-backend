@@ -4,9 +4,9 @@ app.use(express.json());
 
 // --- YOUR API CONFIGURATION ---
 const LUDUS_CONFIG = {
-  API_KEY: process.env.LUDUS_API_KEY || "YOUR_API_KEY_HERE", // Render will look for LUDUS_API_KEY in Environment Variables
-  API_ENDPOINT: process.env.LUDUS_ENDPOINT || "https://api.openai.com/v1/chat/completions",
-  MODEL: process.env.LUDUS_MODEL || "gpt-4o",
+  API_KEY: process.env.LUDUS_API_KEY || "YOUR_API_KEY_HERE", 
+  API_ENDPOINT: "https://api.openai.com/v1/chat/completions",
+  MODEL: "gpt-4o",
   MAX_RETRIES: 2,
   TEMPERATURE: 0.3,
 };
@@ -30,7 +30,6 @@ const TEACHING_PROTOCOL = `TEACHING PROTOCOL:
 - Structure: HEADING IN CAPITALS, DEFINITION, EXPLANATION, YOUR TASK.
 - Critique Structure: WHAT YOU GOT RIGHT, WHAT YOU GOT WRONG (with authority), THE CORRECT LEGAL POSITION, NEXT STEP.`;
 
-// --- MATERIAL 1: LOC262 ---
 const LOC262_MATERIAL = {
   id: "LOC262",
   name: "Law of Contract",
@@ -63,11 +62,9 @@ const LOC262_MATERIAL = {
       cases: "Shifren, Jajbhay v Cassim",
       task: "X pays Y R50,000 to kill X's mother-in-law. Y doesn't do it. X wants his money back. Identify the ISSUE. State the RULES. APPLY Jajbhay. Give the CONCLUSION. Wait."
     }
-  ],
-  scenarios: {}
+  ]
 };
 
-// --- MATERIAL 2: LAC262 ---
 const LAC262_MATERIAL = {
   id: "LAC262",
   name: "African Customary Law",
@@ -91,12 +88,18 @@ const LAC262_MATERIAL = {
       explanation: "The borrower gets the milk and ploughing power. If the animal dies naturally in a storm, the owner bears the loss.",
       cases: "None specific.",
       task: "Sipho enters into a mafisa contract with David, giving him three cows. One dies in a storm, and David sells another to Peter. Advise Sipho on his legal rights to reclaim the cows. Use IRAC. Wait for my critique."
+    },
+    {
+      id: 3,
+      title: "DISSOLUTION OF MARRIAGE",
+      definition: "Under Section 8(1) of the RCMA, a customary marriage can ONLY be dissolved by a court of law.",
+      explanation: "A family council cannot dissolve a marriage. Traditional reasons like witchcraft are just evidence.",
+      cases: "RCMA s8(1)",
+      task: "Name and explain the SOLE legal ground for dissolving a customary marriage under the RCMA. Explain the difference between this and traditional reasons. Wait for my critique."
     }
-  ],
-  scenarios: {}
+  ]
 };
 
-// --- MATERIAL 3: LDE152 ---
 const LDE152_MATERIAL = {
   id: "LDE152",
   name: "Leadership and Ethics",
@@ -108,15 +111,15 @@ const LDE152_MATERIAL = {
     {
       id: 1,
       title: "LEADERSHIP STYLES",
-      definition: "Transformational leadership inspires followers to achieve extraordinary outcomes. Transactional leadership relies on structure, rewards, and punishments.",
+      definition: "Transformational leadership inspires followers. Transactional relies on rewards and punishments.",
       explanation: "Transformational leaders rely on inspiration, not just positional authority.",
       cases: "None specific.",
-      task: "Compare the leadership approaches of Donald Trump and Cyril Ramaphosa. Evaluate this statement: 'Ramaphosa's emphasis on consultation aligns more closely with transactional leadership than with transformational leadership.' TRUE or FALSE? Explain. Wait for my critique."
+      task: "Evaluate: 'Ramaphosa's emphasis on consultation aligns more closely with transactional leadership than with transformational leadership.' TRUE or FALSE? Explain. Wait for my critique."
     },
     {
       id: 2,
       title: "EMOTIONAL INTELLIGENCE (BAR-ON)",
-      definition: "Bar-On's model consists of 5 blocks: Intrapersonal, Interpersonal, Adaptability, Stress Management, and General Mood.",
+      definition: "Bar-On's model: Intrapersonal, Interpersonal, Adaptability, Stress Management, and General Mood.",
       explanation: "Leadership principles like Empathy, Humility, and Integrity map to these blocks.",
       cases: "None specific.",
       task: "Select the THREE most appropriate leadership principles from Bar-On's model for managing a diverse workplace. State the blocks supporting each. Wait for my critique."
@@ -129,12 +132,10 @@ const LDE152_MATERIAL = {
       cases: "John Kotter",
       task: "Advise a newly appointed CEO who must urgently implement changes to save a struggling company. Use Kotter's steps. Wait for my critique."
     }
-  ],
-  scenarios: {}
+  ]
 };
 
-// --- THE ENGINE LOGIC ---
-function validateResponse(text, material) {
+function validateResponse(text) {
   const violations = [];
   if (text.includes("*")) violations.push("MARKDOWN ASTERISKS DETECTED. Remove all asterisks.");
   const hasCapsHeading = /^[A-Z0-9 ,.'\-()]{5,}$/m.test(text);
@@ -186,31 +187,39 @@ Prescribed IRAC task: ${topic.task}`;
       { role: "user", content: userMessage },
     ];
 
-    const response = await fetch(LUDUS_CONFIG.API_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${LUDUS_CONFIG.API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: LUDUS_CONFIG.MODEL,
-        messages,
-        temperature: LUDUS_CONFIG.TEMPERATURE,
-      }),
-    });
+    try {
+      const response = await fetch(LUDUS_CONFIG.API_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${LUDUS_CONFIG.API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: LUDUS_CONFIG.MODEL,
+          messages: messages,
+          temperature: LUDUS_CONFIG.TEMPERATURE,
+        }),
+      });
 
-    const data = await response.json();
-    const aiText = data.choices[0].message.content;
-    const violations = validateResponse(aiText, this.material);
+      if (!response.ok) {
+        return "Error: The AI API key might be invalid or you have no credits.";
+      }
 
-    if (violations.length > 0 && retryCount < LUDUS_CONFIG.MAX_RETRIES) {
-      const correctionPrompt = `YOUR PREVIOUS RESPONSE VIOLATED THE RULES:\n${violations.join("\n")}\nCORRECT IT. End with a task. No asterisks. ALL CAPS headings.`;
-      return this.callAI(correctionPrompt, retryCount + 1);
+      const data = await response.json();
+      const aiText = data.choices[0].message.content;
+      const violations = validateResponse(aiText);
+
+      if (violations.length > 0 && retryCount < LUDUS_CONFIG.MAX_RETRIES) {
+        const correctionPrompt = `YOUR PREVIOUS RESPONSE VIOLATED THE RULES:\n${violations.join("\n")}\nCORRECT IT. End with a task. No asterisks. ALL CAPS headings.`;
+        return this.callAI(correctionPrompt, retryCount + 1);
+      }
+
+      this.history.push({ role: "user", content: userMessage });
+      this.history.push({ role: "assistant", content: aiText });
+      return aiText;
+    } catch (error) {
+      return "Error: Could not connect to the AI.";
     }
-
-    this.history.push({ role: "user", content: userMessage });
-    this.history.push({ role: "assistant", content: aiText });
-    return aiText;
   }
 
   async start() {
@@ -232,52 +241,174 @@ Prescribed IRAC task: ${topic.task}`;
   }
 }
 
-// --- SERVER BOOTSTRAP ---
 const engine = new LecturerEngine();
 engine.registerMaterial(LOC262_MATERIAL);
 engine.registerMaterial(LAC262_MATERIAL);
 engine.registerMaterial(LDE152_MATERIAL);
 
-// Memory to hold sessions for different users
 const activeSessions = {};
 
-// 1. START LECTURE
 app.post('/api/start', async (req, res) => {
-    try {
-        const { sessionId, moduleId } = req.body;
-        activeSessions[sessionId] = engine.createSession(moduleId);
-        const reply = await activeSessions[sessionId].start();
-        res.json({ reply });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+    const { sessionId, moduleId } = req.body;
+    activeSessions[sessionId] = engine.createSession(moduleId);
+    const reply = await activeSessions[sessionId].start();
+    res.json({ reply });
 });
 
-// 2. SUBMIT ANSWER
 app.post('/api/answer', async (req, res) => {
-    try {
-        const { sessionId, answer } = req.body;
-        if (!activeSessions[sessionId]) return res.status(404).json({ error: "Session not found" });
-        const reply = await activeSessions[sessionId].sendStudentAnswer(answer);
-        res.json({ reply });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+    const { sessionId, answer } = req.body;
+    if (!activeSessions[sessionId]) return res.status(404).json({ error: "Session expired. Please restart." });
+    const reply = await activeSessions[sessionId].sendStudentAnswer(answer);
+    res.json({ reply });
 });
 
-// 3. ADVANCE TOPIC
 app.post('/api/advance', async (req, res) => {
-    try {
-        const { sessionId } = req.body;
-        if (!activeSessions[sessionId]) return res.status(404).json({ error: "Session not found" });
-        const reply = await activeSessions[sessionId].advance();
-        res.json({ reply });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+    const { sessionId } = req.body;
+    if (!activeSessions[sessionId]) return res.status(404).json({ error: "Session expired. Please restart." });
+    const reply = await activeSessions[sessionId].advance();
+    res.json({ reply });
 });
 
-// Render needs the port to be dynamically assigned
+app.get('/', (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STADIO AI Law Professor</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f7f6; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        .header { background: #002B5B; color: white; padding: 15px; text-align: center; font-size: 20px; font-weight: bold; }
+        .controls { display: flex; justify-content: center; padding: 10px; background: #e0e6ed; gap: 10px; flex-wrap: wrap; }
+        select, button { padding: 10px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; }
+        button { background: #002B5B; color: white; cursor: pointer; border: none; }
+        button:hover { background: #004080; }
+        button:disabled { background: #999; cursor: not-allowed; }
+        #chat-container { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .message { max-width: 85%; padding: 15px; border-radius: 10px; line-height: 1.6; white-space: pre-wrap; }
+        .user-message { background: #d1e7dd; align-self: flex-end; color: #0f5132; }
+        .ai-message { background: white; align-self: flex-start; color: #333; border-left: 5px solid #002B5B; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .input-area { display: flex; padding: 15px; background: white; border-top: 1px solid #ccc; }
+        input[type="text"] { flex: 1; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 5px; margin-right: 10px; }
+    </style>
+</head>
+<body>
+    <div class="header">STADIO AI Law Professor</div>
+    <div class="controls">
+        <select id="moduleSelect">
+            <option value="LOC262">LOC262 - Law of Contract</option>
+            <option value="LAC262">LAC262 - Customary Law</option>
+            <option value="LDE152">LDE152 - Leadership & Ethics</option>
+        </select>
+        <button id="startBtn" onclick="startLecture()">Start Lecture</button>
+        <button id="advanceBtn" onclick="advanceLecture()" disabled>Advance to Next Topic</button>
+    </div>
+    <div id="chat-container">
+        <div class="message ai-message">Welcome. Select a module and click "Start Lecture" to begin.</div>
+    </div>
+    <div class="input-area" id="inputArea" style="display: none;">
+        <input type="text" id="userInput" placeholder="Type your IRAC answer here..." onkeypress="handleKeyPress(event)">
+        <button onclick="sendAnswer()">Send Answer</button>
+    </div>
+
+    <script>
+        const sessionId = 'user-' + Math.random().toString(36).substring(2, 9);
+        
+        function appendMessage(role, text) {
+            const container = document.getElementById('chat-container');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message ' + (role === 'user' ? 'user-message' : 'ai-message');
+            msgDiv.textContent = text;
+            container.appendChild(msgDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        async function startLecture() {
+            const moduleId = document.getElementById('moduleSelect').value;
+            const startBtn = document.getElementById('startBtn');
+            const advanceBtn = document.getElementById('advanceBtn');
+            const inputArea = document.getElementById('inputArea');
+            
+            startBtn.disabled = true;
+            startBtn.textContent = "Starting...";
+            appendMessage('ai', "Connecting to the Professor...");
+
+            try {
+                const response = await fetch('/api/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: sessionId, moduleId: moduleId })
+                });
+                const data = await response.json();
+                document.getElementById('chat-container').lastChild.remove();
+                if (data.reply) {
+                    appendMessage('ai', data.reply);
+                    inputArea.style.display = 'flex';
+                    advanceBtn.disabled = false;
+                    startBtn.textContent = "Restart Lecture";
+                } else {
+                    appendMessage('ai', "Error: " + data.error);
+                }
+            } catch (error) {
+                appendMessage('ai', "Failed to connect. Check server logs.");
+            }
+            startBtn.disabled = false;
+        }
+
+        async function sendAnswer() {
+            const input = document.getElementById('userInput');
+            const text = input.value.trim();
+            if (!text) return;
+
+            appendMessage('user', text);
+            input.value = '';
+            input.disabled = true;
+
+            try {
+                const response = await fetch('/api/answer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: sessionId, answer: text })
+                });
+                const data = await response.json();
+                if (data.reply) appendMessage('ai', data.reply);
+            } catch (error) {
+                appendMessage('ai', "Failed to send answer.");
+            }
+            input.disabled = false;
+            input.focus();
+        }
+
+        async function advanceLecture() {
+            const advanceBtn = document.getElementById('advanceBtn');
+            advanceBtn.disabled = true;
+            advanceBtn.textContent = "Advancing...";
+
+            try {
+                const response = await fetch('/api/advance', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: sessionId })
+                });
+                const data = await response.json();
+                if (data.reply) appendMessage('ai', data.reply);
+            } catch (error) {
+                appendMessage('ai', "Failed to advance.");
+            }
+            advanceBtn.disabled = false;
+            advanceBtn.textContent = "Advance to Next Topic";
+        }
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter') sendAnswer();
+        }
+    </script>
+</body>
+</html>
+  `);
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Ludus AI Professor is running on port ${PORT}`);
