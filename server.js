@@ -10,7 +10,6 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Store files temporarily on disk
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const dir = './uploads';
@@ -24,31 +23,33 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+    limits: { fileSize: 10 * 1024 * 1024 } 
 });
 
 const LUDUS_CONFIG = {
   API_KEY: process.env.DEEPSEEK_API_KEY, 
   API_ENDPOINT: "https://api.deepseek.com/chat/completions",
   MODEL: "deepseek-chat", 
-  TEMPERATURE: 0.0, 
+  TEMPERATURE: 0.3, // Slightly raised from 0.0 to allow for more intelligent explanations
 };
 
-// --- STRICT PROMPT: NO SUMMARIES, KEEP HEADINGS, CLEAN TEXT ---
+// --- UPDATED PROMPT: SEQUENTIAL READ + SMART EXPLANATIONS + EXTERNAL KNOWLEDGE ---
 const DISCIPLINE_PROMPT = `You are a strict, highly experienced South African LLB Law Professor specializing in the Law of Contract (LOC262). You are training a student under extreme pressure for an exam.
 
 YOUR TASK:
-Read and explain the provided document sequentially from beginning to end. DO NOT SUMMARIZE. You must act as an audio textbook, delivering a structured lecture that follows the exact sequence of the document.
+Read the provided document sequentially from beginning to end. DO NOT SUMMARIZE. You must act as an audio textbook. However, you are a Professor, not just a narrator. 
 
-CRITICAL INSTRUCTIONS:
-1. MAINTAIN STRUCTURE: Whenever you encounter a heading, subheading, or title in the text, state it clearly first (e.g., "Heading: Part 1, The Ludus System Prompt"). 
-2. DO NOT SKIP ANYTHING: Walk through the text in the exact order it appears so the student can follow along in their physical copy and know exactly what to cite.
-3. EXPLAIN AS YOU GO: After reading a section or paragraph, briefly explain the legal principle in clear terms.
-4. CLEAN TEXT ONLY: You are generating a script for a Text-to-Speech engine.
-   - NO Markdown symbols (no asterisks, no hashtags, no underscores).
-   - NO HTML entities (use standard quotation marks " ").
-   - Use simple numbers (1., 2., 3.) for lists.
-   - Write in clear, full sentences with proper paragraphs.`;
+CRITICAL INSTRUCTIONS FOR CLEAN READING:
+1. IGNORE FORMATTING: Do NOT read out loud page numbers (e.g., "Page 1"), equals signs (=), hashtags (#), asterisks (*), or table pipe symbols (|). 
+2. TABLES: Do NOT read tables line-by-line like a robot. Read the table row by row as spoken sentences (e.g., "In the scenario of a common mistake, the contract is void...").
+3. MAINTAIN STRUCTURE: State actual text headings clearly (e.g., "Part 2: The Application Audit").
+
+CRITICAL INSTRUCTIONS FOR EXPLANATION AND EXTERNAL INTELLIGENCE:
+1. EXPLAIN THE LAW: After reading a section or a rule from the document, you MUST explain it in plain English. Break down complex legal jargon.
+2. USE EXTERNAL KNOWLEDGE: The document is your foundation, but you ARE ALLOWED to bring in your own intelligence and outside legal knowledge (such as relevant South African case law, statutes, or real-world examples) to enrich the explanation.
+3. STAY ON TOPIC: Any outside knowledge you bring in MUST be strictly relevant to the specific topic, the module (Law of Contract), and help the student understand the text better.
+
+CLEAN TEXT ONLY: Do not use markdown symbols in your output. Use standard quotation marks. Write in clear, full sentences with proper paragraphs.`;
 
 app.post(['/api/lecture', '/api/ludus/lecture'], upload.any(), async (req, res) => {
     let file = req.files && req.files.length > 0 ? req.files[0] : null;
@@ -81,7 +82,6 @@ app.post(['/api/lecture', '/api/ludus/lecture'], upload.any(), async (req, res) 
             return res.status(400).json({ error: "No readable text found. It might be a scanned image." });
         }
 
-        // INCREASED LIMIT: Allow up to 80,000 characters
         if (documentText.length > 80000) {
             documentText = documentText.substring(0, 80000) + "\n\n[Document truncated due to size limits. Please split large files.]";
         }
@@ -99,7 +99,7 @@ app.post(['/api/lecture', '/api/ludus/lecture'], upload.any(), async (req, res) 
                     { role: "user", content: `Student Instruction: ${userPrompt}\n\nDocument Content to read step-by-step:\n${documentText}` }
                 ],
                 temperature: LUDUS_CONFIG.TEMPERATURE,
-                max_tokens: 8000 // INCREASED OUTPUT: Allow AI to write longer responses
+                max_tokens: 8000 
             })
         });
 
