@@ -4,13 +4,13 @@ const multer = require('multer');
 const mammoth = require('mammoth');
 const fs = require('fs');
 const path = require('path');
-const { extractText } = require('unpdf');
+// Switch to getDocumentProxy for page-by-page extraction
+const { getDocumentProxy, extractText } = require('unpdf');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 
-// Store files on disk temporarily
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const dir = './uploads';
@@ -24,7 +24,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
+    limits: { fileSize: 100 * 1024 * 1024 } 
 });
 
 const LUDUS_CONFIG = {
@@ -38,6 +38,7 @@ const DISCIPLINE_PROMPT = `You are a strict, highly experienced South African Pr
 
 app.post('/api/lecture', upload.single('document'), async (req, res) => {
     let filePath = req.file ? req.file.path : null;
+    let pdfProxy = null;
     
     try {
         const userPrompt = req.body.prompt || "Please analyze this document.";
@@ -49,10 +50,27 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
 
             if (mimeType === 'application/pdf' || originalName.endsWith('.pdf')) {
                 const dataBuffer = fs.readFileSync(filePath);
-                const pdfData = await extractText(new Uint8Array(dataBuffer), { mergePages: true });
-                documentText = pdfData.text; 
+                // Load PDF proxy for page-by-page reading
+                pdfProxy = await getDocumentProxy(new Uint8Array(dataBuffer));
+                const totalPages = pdfProxy.numPages;
+                
+                const MAX_PAGES = 40; // Limit to 40 pages (~15k-20k characters)
+                const pagesToRead = Math.min(totalPages, MAX_PAGES);
+
+                for (let i = 1; i <= pagesToRead; i++) {
+                    const page = await pdfProxy.getPage(i);
+                    const textContent = await page.getTextContent();
+                    const pageText = textContent.items.map(item => item.str).join(' ');
+                    documentText += pageText + "\n";
+                    
+                    // Stop if text gets too long for DeepSeek
+                    if (documentText.length > 15000) break;
+                }
+
+                if (totalPages > MAX_PAGES) {
+                    documentText += `\n\n[Document truncated: Analyzed first ${MAX_PAGES} pages out of ${totalPages} total pages.]`;
+                }
             } else if (mimeType.includes('word') || mimeType.includes('officedocument') || originalName.endsWith('.docx') || originalName.endsWith('.doc')) {
-                // FIXED: Read file into buffer first, then pass to mammoth
                 const docxBuffer = fs.readFileSync(filePath);
                 const docxData = await mammoth.extractRawText({ buffer: docxBuffer });
                 documentText = docxData.value || "";
@@ -61,17 +79,15 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
             }
         }
 
-        // Check if the document actually had text in it
         if (!documentText || documentText.trim() === "") {
             return res.status(400).json({ error: "The document appears to be empty or contains no readable text." });
         }
 
-        // Limit text to ~15,000 characters for DeepSeek to prevent token errors
+        // Strict character limit to prevent DeepSeek 413 Payload Too Large
         if (documentText.length > 15000) {
             documentText = documentText.substring(0, 15000) + "\n\n[Document truncated to fit AI limits]";
         }
 
-        // Send to DeepSeek
         const response = await fetch(LUDUS_CONFIG.API_ENDPOINT, {
             method: 'POST',
             headers: {
@@ -92,7 +108,6 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
         if (!response.ok) {
             const errorDetails = await response.text();
             console.error("DeepSeek API Error Response:", errorDetails);
-            // Send the real API error to the frontend
             return res.status(500).json({ error: `AI service error (${response.status}). Check your DeepSeek API key or balance.` });
         }
 
@@ -101,16 +116,14 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
 
     } catch (error) {
         console.error("Detailed Backend Error:", error.stack || error.message);
-        // Send the real error to the frontend so you can see it on the screen
         res.status(500).json({ error: `Processing error: ${error.message}` });
     } finally {
-        // Clean up the file from disk
+        // Clean up memory
+        if (pdfProxy) {
+            try { await pdfProxy.destroy(); } catch (e) {}
+        }
         if (filePath && fs.existsSync(filePath)) {
-            try {
-                fs.unlinkSync(filePath);
-            } catch (err) {
-                console.error("Failed to clean up temporary file:", err);
-            }
+            try { fs.unlinkSync(filePath); } catch (err) {}
         }
     }
 });
