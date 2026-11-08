@@ -10,7 +10,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Configure storage for uploaded files
+// Store files temporarily on disk
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const dir = './uploads';
@@ -18,14 +18,14 @@ const storage = multer.diskStorage({
         cb(null, dir);
     },
     filename: (req, file, cb) => {
-        // Use a safe filename to avoid path errors
         cb(null, Date.now() + path.extname(file.originalname));
     }
 });
 
+// 10MB limit for uploads
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+    limits: { fileSize: 10 * 1024 * 1024 } 
 });
 
 const LUDUS_CONFIG = {
@@ -40,17 +40,7 @@ YOUR ONLY SOURCE OF TRUTH IS THE DOCUMENT PROVIDED.
 Do not use outside legal knowledge. If the answer is not in the text, you must say: "This specific topic is not covered in the uploaded document." 
 Always quote the text directly to support your lecture. Structure your response clearly with headings.`;
 
-app.post('/api/lecture', (req, res, next) => {
-    // Wrap the upload middleware to catch file-level errors (like size limits)
-    upload.single('document')(req, res, (err) => {
-        if (err instanceof multer.MulterError) {
-            return res.status(400).json({ error: `File upload error: ${err.message}` });
-        } else if (err) {
-            return res.status(500).json({ error: `Unknown upload error: ${err.message}` });
-        }
-        next();
-    });
-}, async (req, res) => {
+app.post('/api/lecture', upload.single('document'), async (req, res) => {
     let filePath = req.file ? req.file.path : null;
     
     try {
@@ -61,28 +51,48 @@ app.post('/api/lecture', (req, res, next) => {
             const mimeType = req.file.mimetype;
             const originalName = req.file.originalname.toLowerCase();
 
+            // --- HANDLING PDF FILES ---
             if (mimeType === 'application/pdf' || originalName.endsWith('.pdf')) {
-                const dataBuffer = fs.readFileSync(filePath);
-                const pdfData = await extractText(new Uint8Array(dataBuffer), { mergePages: true });
-                documentText = pdfData.text;
-            } else if (mimeType.includes('word') || mimeType.includes('officedocument') || originalName.endsWith('.docx') || originalName.endsWith('.doc')) {
-                const docxBuffer = fs.readFileSync(filePath);
-                // Use buffer property explicitly for mammoth to prevent path errors
-                const docxData = await mammoth.extractRawText({ buffer: docxBuffer });
-                documentText = docxData.value || "";
+                try {
+                    const dataBuffer = fs.readFileSync(filePath);
+                    const pdfData = await extractText(new Uint8Array(dataBuffer), { mergePages: true });
+                    documentText = pdfData.text;
+                    
+                    if (!documentText || documentText.trim() === "") {
+                        return res.status(400).json({ error: "This PDF contains no readable text. It might be a scanned image. Please upload a text-based PDF or Word document." });
+                    }
+                } catch (pdfErr) {
+                    return res.status(400).json({ error: "Failed to read the PDF file. It might be corrupted." });
+                }
+            } 
+            // --- HANDLING WORD FILES ---
+            else if (mimeType.includes('word') || mimeType.includes('officedocument') || originalName.endsWith('.docx') || originalName.endsWith('.doc')) {
+                try {
+                    const docxBuffer = fs.readFileSync(filePath);
+                    const docxData = await mammoth.extractRawText({ buffer: Buffer.from(docxBuffer) });
+                    documentText = docxData.value || "";
+                    
+                    if (!documentText || documentText.trim() === "") {
+                        return res.status(400).json({ error: "This Word document contains no readable text. Please ensure it is not empty." });
+                    }
+                } catch (wordErr) {
+                    return res.status(400).json({ error: "Failed to read the Word document. Please save it as a standard .docx file and try again." });
+                }
+            } 
+            // --- HANDLING TEXT FILES ---
+            else if (mimeType === 'text/plain' || originalName.endsWith('.txt')) {
+                documentText = fs.readFileSync(filePath, 'utf8');
             } else {
-                return res.status(400).json({ error: "Please upload a valid PDF or Word document." });
+                return res.status(400).json({ error: "Unsupported file format. Please upload a PDF, Word document, or Text file." });
             }
         }
 
-        if (!documentText || documentText.trim() === "") {
-            return res.status(400).json({ error: "No readable text found. The document might be empty, a scanned image, or corrupted." });
-        }
-
+        // Limit text to prevent DeepSeek token errors
         if (documentText.length > 30000) {
             documentText = documentText.substring(0, 30000) + "\n\n[Document truncated to fit AI limits]";
         }
 
+        // Send to DeepSeek
         const response = await fetch(LUDUS_CONFIG.API_ENDPOINT, {
             method: 'POST',
             headers: {
@@ -103,24 +113,24 @@ app.post('/api/lecture', (req, res, next) => {
         if (!response.ok) {
             const errorDetails = await response.text();
             console.error("DeepSeek API Error Response:", errorDetails);
-            return res.status(500).json({ error: `AI service error (${response.status}). Check your DeepSeek API key or balance.` });
+            return res.status(500).json({ error: `DeepSeek AI Error (${response.status}). Please check your API key or account balance.` });
         }
 
         const data = await response.json();
         res.json({ success: true, lecture: data.choices[0].message.content });
 
     } catch (error) {
-        console.error("Detailed Backend Error:", error.stack || error.message);
-        // Send the exact error message to the frontend so you can see it
+        console.error("Internal Server Error:", error.message);
         res.status(500).json({ error: `Processing error: ${error.message}` });
     } finally {
+        // Delete the file after processing
         if (filePath && fs.existsSync(filePath)) {
             try { fs.unlinkSync(filePath); } catch (err) {}
         }
     }
 });
 
-// --- FRONTEND WEBSITE ---
+// --- FRONTEND ---
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -206,7 +216,7 @@ app.get('/', (req, res) => {
                         resultDiv.textContent = data.lecture;
                         resultDiv.style.display = 'block';
                     } catch (error) {
-                        errorDiv.textContent = "Error: " + error.message;
+                        errorDiv.textContent = error.message;
                         errorDiv.style.display = 'block';
                     } finally {
                         submitBtn.disabled = false;
@@ -221,5 +231,5 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Ludus AI Professor is running on port ${PORT}`);
+    console.log(`Ludus AI Lecturer is running on port ${PORT}`);
 });
