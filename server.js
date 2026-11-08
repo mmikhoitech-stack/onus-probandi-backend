@@ -4,13 +4,13 @@ const multer = require('multer');
 const mammoth = require('mammoth');
 const fs = require('fs');
 const path = require('path');
-// Switch to getDocumentProxy for page-by-page extraction
-const { getDocumentProxy, extractText } = require('unpdf');
+const { getDocumentProxy } = require('unpdf');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 
+// Store files on disk temporarily
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const dir = './uploads';
@@ -24,17 +24,22 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 100 * 1024 * 1024 } 
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
 });
 
+// --- API CONFIGURATION ---
 const LUDUS_CONFIG = {
   API_KEY: process.env.DEEPSEEK_API_KEY, 
   API_ENDPOINT: "https://api.deepseek.com/chat/completions",
   MODEL: "deepseek-chat", 
-  TEMPERATURE: 0.3,
+  TEMPERATURE: 0.0, // Changed to 0.0 to stop the AI from hallucinating
 };
 
-const DISCIPLINE_PROMPT = `You are a strict, highly experienced South African Professor. You teach Law of Contract (LOC262) and Onus Probandi principles. Analyze the provided text rigorously and answer the student's prompt based on the document.`;
+// --- STRICT SYSTEM PROMPT ---
+const DISCIPLINE_PROMPT = `You are a strict, highly experienced South African Professor teaching Law of Contract (LOC262) and Onus Probandi. 
+YOUR ONLY SOURCE OF TRUTH IS THE DOCUMENT PROVIDED. 
+Do not use outside legal knowledge. If the answer is not in the text, you must say: "This specific topic is not covered in the uploaded document." 
+Always quote the text directly to support your lecture. Structure your response clearly with headings.`;
 
 app.post('/api/lecture', upload.single('document'), async (req, res) => {
     let filePath = req.file ? req.file.path : null;
@@ -54,7 +59,8 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
                 pdfProxy = await getDocumentProxy(new Uint8Array(dataBuffer));
                 const totalPages = pdfProxy.numPages;
                 
-                const MAX_PAGES = 40; // Limit to 40 pages (~15k-20k characters)
+                // Read up to 100 pages to allow large study guides, but prevent server crashes
+                const MAX_PAGES = 100; 
                 const pagesToRead = Math.min(totalPages, MAX_PAGES);
 
                 for (let i = 1; i <= pagesToRead; i++) {
@@ -62,9 +68,6 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
                     const textContent = await page.getTextContent();
                     const pageText = textContent.items.map(item => item.str).join(' ');
                     documentText += pageText + "\n";
-                    
-                    // Stop if text gets too long for DeepSeek
-                    if (documentText.length > 15000) break;
                 }
 
                 if (totalPages > MAX_PAGES) {
@@ -83,11 +86,12 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
             return res.status(400).json({ error: "The document appears to be empty or contains no readable text." });
         }
 
-        // Strict character limit to prevent DeepSeek 413 Payload Too Large
-        if (documentText.length > 15000) {
-            documentText = documentText.substring(0, 15000) + "\n\n[Document truncated to fit AI limits]";
+        // Set a very high limit (100,000 chars) to allow large documents without hitting API limits
+        if (documentText.length > 100000) {
+            documentText = documentText.substring(0, 100000) + "\n\n[Document truncated to fit AI limits]";
         }
 
+        // Send to DeepSeek
         const response = await fetch(LUDUS_CONFIG.API_ENDPOINT, {
             method: 'POST',
             headers: {
