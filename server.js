@@ -2,16 +2,29 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const mammoth = require('mammoth');
+const fs = require('fs');
+const path = require('path');
 const { extractText } = require('unpdf');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
 
-// Store file in memory but limit size to 50MB to prevent server crashes
+// Store files on disk temporarily
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const dir = './uploads';
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+        cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+        cb(null, Date.now() + path.extname(file.originalname));
+    }
+});
+
 const upload = multer({ 
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 50 * 1024 * 1024 } 
+    storage: storage,
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
 });
 
 const LUDUS_CONFIG = {
@@ -21,34 +34,44 @@ const LUDUS_CONFIG = {
   TEMPERATURE: 0.3,
 };
 
-const DISCIPLINE_PROMPT = `You are a strict, highly experienced South African Professor. You teach Law of Contract (LOC262) and Onus Probandi principles. 
-YOUR TEACHING STYLE: Analyze the provided text rigorously, cite relevant legal principles, and answer the student's prompt based strictly on the uploaded document.`;
+const DISCIPLINE_PROMPT = `You are a strict, highly experienced South African Professor. You teach Law of Contract (LOC262) and Onus Probandi principles. Analyze the provided text rigorously and answer the student's prompt based on the document.`;
 
 app.post('/api/lecture', upload.single('document'), async (req, res) => {
+    let filePath = req.file ? req.file.path : null;
+    
     try {
         const userPrompt = req.body.prompt || "Please analyze this document.";
         let documentText = "";
 
         if (req.file) {
             const mimeType = req.file.mimetype;
+            const originalName = req.file.originalname.toLowerCase();
 
-            if (mimeType === 'application/pdf') {
-                // Using unpdf to prevent Render crashes
-                const pdfData = await extractText(new Uint8Array(req.file.buffer));
-                documentText = pdfData.text;
-            } else if (mimeType.includes('word') || mimeType.includes('officedocument')) {
-                const docxData = await mammoth.extractRawText({ buffer: req.file.buffer });
-                documentText = docxData.value;
+            if (mimeType === 'application/pdf' || originalName.endsWith('.pdf')) {
+                const dataBuffer = fs.readFileSync(filePath);
+                const pdfData = await extractText(new Uint8Array(dataBuffer), { mergePages: true });
+                documentText = pdfData.text; 
+            } else if (mimeType.includes('word') || mimeType.includes('officedocument') || originalName.endsWith('.docx') || originalName.endsWith('.doc')) {
+                // FIXED: Read file into buffer first, then pass to mammoth
+                const docxBuffer = fs.readFileSync(filePath);
+                const docxData = await mammoth.extractRawText({ buffer: docxBuffer });
+                documentText = docxData.value || "";
             } else {
-                return res.status(400).json({ error: "Please upload a PDF or Word document." });
+                return res.status(400).json({ error: "Please upload a valid PDF or Word document." });
             }
         }
 
-        // DeepSeek has a token limit. We truncate very large files to 15,000 characters.
-        if (documentText.length > 15000) {
-            documentText = documentText.substring(0, 15000) + "\n\n[Document truncated due to size limits]";
+        // Check if the document actually had text in it
+        if (!documentText || documentText.trim() === "") {
+            return res.status(400).json({ error: "The document appears to be empty or contains no readable text." });
         }
 
+        // Limit text to ~15,000 characters for DeepSeek to prevent token errors
+        if (documentText.length > 15000) {
+            documentText = documentText.substring(0, 15000) + "\n\n[Document truncated to fit AI limits]";
+        }
+
+        // Send to DeepSeek
         const response = await fetch(LUDUS_CONFIG.API_ENDPOINT, {
             method: 'POST',
             headers: {
@@ -67,20 +90,32 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
         });
 
         if (!response.ok) {
-            console.error("DeepSeek API Error:", await response.text());
-            return res.status(500).json({ error: "The AI service returned an error." });
+            const errorDetails = await response.text();
+            console.error("DeepSeek API Error Response:", errorDetails);
+            // Send the real API error to the frontend
+            return res.status(500).json({ error: `AI service error (${response.status}). Check your DeepSeek API key or balance.` });
         }
 
         const data = await response.json();
         res.json({ success: true, lecture: data.choices[0].message.content });
 
     } catch (error) {
-        console.error("Server Error:", error);
-        res.status(500).json({ error: "An error occurred while processing the document." });
+        console.error("Detailed Backend Error:", error.stack || error.message);
+        // Send the real error to the frontend so you can see it on the screen
+        res.status(500).json({ error: `Processing error: ${error.message}` });
+    } finally {
+        // Clean up the file from disk
+        if (filePath && fs.existsSync(filePath)) {
+            try {
+                fs.unlinkSync(filePath);
+            } catch (err) {
+                console.error("Failed to clean up temporary file:", err);
+            }
+        }
     }
 });
 
-// --- FRONTEND UI ---
+// --- FRONTEND WEBSITE ---
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -107,23 +142,29 @@ app.get('/', (req, res) => {
         <body>
             <div class="container">
                 <h1>What should the lecturer teach you today?</h1>
+                
                 <form id="lectureForm">
                     <div class="form-group">
                         <label>1. Upload your Document (PDF or Word)</label>
                         <input type="file" id="document" name="document" accept=".pdf,.doc,.docx" required>
                     </div>
+                    
                     <div class="form-group">
                         <label>2. What should the lecturer teach you today?</label>
                         <input type="text" id="prompt" placeholder="teach me" value="teach me">
                     </div>
+                    
                     <button type="submit" id="submitBtn">Start Lecture</button>
                 </form>
+
                 <div id="error"></div>
                 <div id="result"></div>
             </div>
+
             <script>
                 document.getElementById('lectureForm').addEventListener('submit', async (e) => {
                     e.preventDefault();
+                    
                     const fileInput = document.getElementById('document');
                     const promptInput = document.getElementById('prompt');
                     const submitBtn = document.getElementById('submitBtn');
@@ -150,9 +191,13 @@ app.get('/', (req, res) => {
                             method: 'POST',
                             body: formData
                         });
+
                         const data = await response.json();
-                        if (!response.ok) throw new Error(data.error || "Failed to process");
-                        
+
+                        if (!response.ok) {
+                            throw new Error(data.error || "Failed to process");
+                        }
+
                         resultDiv.textContent = data.lecture;
                         resultDiv.style.display = 'block';
                     } catch (error) {
