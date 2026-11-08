@@ -1,20 +1,24 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
+
+// This specific path bypasses the known pdf-parse crash bug on Render
+const pdfParse = require('pdf-parse/lib/pdf-parse.js');
 
 const app = express();
 
-// Fixes connection errors and allows JSON
 app.use(cors());
-app.use(express.json());
+// Increase JSON limit for large payloads
+app.use(express.json({ limit: '100mb' })); 
 
-// Set up file upload handling (stores file in memory)
-const upload = multer({ storage: multer.memoryStorage() });
+// Allow uploads up to 100MB
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 100 * 1024 * 1024 } 
+});
 
 // --- DEEPSEEK CONFIGURATION ---
-// Using the exact name from your Render environment variables
 const LUDUS_CONFIG = {
   API_KEY: process.env.DEEPSEEK_API_KEY, 
   API_ENDPOINT: "https://api.deepseek.com/chat/completions",
@@ -22,22 +26,26 @@ const LUDUS_CONFIG = {
   TEMPERATURE: 0.3,
 };
 
-// --- SYSTEM PROMPT ---
 const DISCIPLINE_PROMPT = `You are a strict, highly experienced South African Professor. You teach Law of Contract (LOC262) and Onus Probandi principles. 
 YOUR TEACHING STYLE: Analyze the provided text rigorously, cite relevant legal principles, and answer the student's prompt based strictly on the uploaded document.`;
 
-// --- BACKEND API ROUTE (Handles the document upload) ---
 app.post('/api/lecture', upload.single('document'), async (req, res) => {
     try {
         const userPrompt = req.body.prompt || "Please analyze this document.";
         let documentText = "";
 
-        // 1. Read the uploaded document (PDF or Word)
         if (req.file) {
-            if (req.file.mimetype === 'application/pdf') {
-                const pdfData = await pdfParse(req.file.buffer);
-                documentText = pdfData.text;
-            } else if (req.file.mimetype.includes('word') || req.file.mimetype.includes('officedocument')) {
+            const mimeType = req.file.mimetype;
+
+            if (mimeType === 'application/pdf') {
+                try {
+                    const pdfData = await pdfParse(req.file.buffer);
+                    documentText = pdfData.text;
+                } catch (parseErr) {
+                    console.error("PDF Parsing Error:", parseErr);
+                    return res.status(400).json({ error: "Failed to read the PDF. The file might be corrupted or too complex." });
+                }
+            } else if (mimeType.includes('word') || mimeType.includes('officedocument')) {
                 const docxData = await mammoth.extractRawText({ buffer: req.file.buffer });
                 documentText = docxData.value;
             } else {
@@ -45,7 +53,12 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
             }
         }
 
-        // 2. Send extracted text to DeepSeek API
+        // SAFETY LIMIT: DeepSeek only accepts a certain amount of text. 
+        // If the PDF is 57MB, it has too much text. We cut it off at 50,000 characters (about 15-20 pages).
+        if (documentText.length > 50000) {
+            documentText = documentText.substring(0, 50000) + "\n\n[Document truncated due to size limits]";
+        }
+
         const response = await fetch(LUDUS_CONFIG.API_ENDPOINT, {
             method: 'POST',
             headers: {
@@ -58,28 +71,27 @@ app.post('/api/lecture', upload.single('document'), async (req, res) => {
                     { role: "system", content: DISCIPLINE_PROMPT },
                     { role: "user", content: `Student Question: ${userPrompt}\n\nDocument Content:\n${documentText}` }
                 ],
-                temperature: LUDUS_CONFIG.TEMPERATURE
+                temperature: LUDUS_CONFIG.TEMPERATURE,
+                max_tokens: 4000 // Limit the response length
             })
         });
 
         if (!response.ok) {
             const errorDetails = await response.text();
-            console.error("DeepSeek Error:", errorDetails);
-            throw new Error(`DeepSeek API Error: ${response.status}`);
+            console.error("DeepSeek API Error:", errorDetails);
+            return res.status(response.status).json({ error: "The AI service returned an error. Please try again." });
         }
 
         const data = await response.json();
-        
-        // 3. Send the answer back to the website
         res.json({ success: true, lecture: data.choices[0].message.content });
 
     } catch (error) {
-        console.error("Backend Error:", error);
-        res.status(500).json({ error: "The AI Lecturer service returned an error. Please try again." });
+        console.error("Internal Server Error:", error);
+        res.status(500).json({ error: "An internal error occurred while processing the document." });
     }
 });
 
-// --- FRONTEND (HTML/CSS) - Recreated from your screenshot ---
+// --- FRONTEND (The Website UI) ---
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -115,7 +127,7 @@ app.get('/', (req, res) => {
                     
                     <div class="form-group">
                         <label>2. What should the lecturer teach you today?</label>
-                        <input type="text" id="prompt" placeholder="I've uploaded the professor in this attached module" value="I've uploaded the professor in this attached module">
+                        <input type="text" id="prompt" placeholder="teach me" value="teach me">
                     </div>
                     
                     <button type="submit" id="submitBtn">Start Lecture</button>
@@ -141,9 +153,8 @@ app.get('/', (req, res) => {
                         return;
                     }
 
-                    // Reset UI
                     submitBtn.disabled = true;
-                    submitBtn.textContent = "Processing document... Please wait";
+                    submitBtn.textContent = "Processing... Please wait (this may take a minute for large files)";
                     resultDiv.style.display = 'none';
                     errorDiv.style.display = 'none';
 
@@ -179,7 +190,6 @@ app.get('/', (req, res) => {
     `);
 });
 
-// --- START SERVER ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Ludus AI Professor is running on port ${PORT}`);
