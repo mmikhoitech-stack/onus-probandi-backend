@@ -9,11 +9,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. Database Connection (Render Internal URL)
+// ==========================================
+// 1. DATABASE CONNECTION
+// ==========================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('render.com') 
-    ? { rejectUnauthorized: false } // Required for Render external, safe for internal too
+    ? { rejectUnauthorized: false } 
     : false
 });
 
@@ -27,7 +29,23 @@ pool.connect((err, client, release) => {
   }
 });
 
-// 2. The AI Prompt Configuration
+// Initialize the Email Table automatically
+pool.query(`
+  CREATE TABLE IF NOT EXISTS internal_emails (
+      id SERIAL PRIMARY KEY,
+      sender_email VARCHAR(255) NOT NULL,
+      recipient_email VARCHAR(255) NOT NULL,
+      subject VARCHAR(255),
+      body TEXT,
+      case_reference VARCHAR(100),
+      is_read BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+`).then(() => console.log('✅ Internal Email Table is ready')).catch(err => console.error('DB Init Error:', err));
+
+// ==========================================
+// 2. AI LEGAL ASSISTANT (DeepSeek)
+// ==========================================
 const systemPrompt = `You are a senior South African attorney at a boutique South African law firm. You have 20 years of experience.
 
 YOUR TASK:
@@ -38,11 +56,11 @@ You will receive an incoming email and, optionally, the extracted text of an att
 
 You are drafting CORRESPONDENCE only, not a legal opinion. An attorney will review and sign off before it is sent.`;
 
-// 3. API Endpoints
 app.get('/', (req, res) => {
-  res.send('Onus Probandi Backend is running successfully!');
+  res.send('Onus Probandi Ferrari Engine is running smoothly!');
 });
 
+// AI Analysis Endpoint
 app.post('/api/analyze', async (req, res) => {
   try {
     const { emailText } = req.body;
@@ -51,7 +69,6 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(400).json({ error: 'emailText is required' });
     }
 
-    // Call DeepSeek API (Make sure DEEPSEEK_API_KEY is in your Render Environment Variables)
     const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -76,7 +93,74 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
-// 4. THE CRITICAL RENDER PORT BINDING
+// ==========================================
+// 3. NEW: INTERNAL EMAIL FACILITY (NO MICROSOFT)
+// ==========================================
+
+// A. Send an Email
+app.post('/api/emails/send', async (req, res) => {
+  try {
+    const { sender_email, recipient_email, subject, body, case_reference } = req.body;
+    
+    if (!sender_email || !recipient_email || !body) {
+      return res.status(400).json({ error: 'Sender, recipient, and body are required.' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO internal_emails (sender_email, recipient_email, subject, body, case_reference) 
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [sender_email, recipient_email, subject, body, case_reference]
+    );
+
+    res.status(201).json({ message: 'Email sent successfully', email: result.rows[0] });
+  } catch (error) {
+    console.error('Send Error:', error);
+    res.status(500).json({ error: 'Failed to send email' });
+  }
+});
+
+// B. Get Inbox
+app.get('/api/emails/inbox/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const result = await pool.query(
+      `SELECT * FROM internal_emails WHERE recipient_email = $1 ORDER BY created_at DESC`,
+      [email]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch inbox' });
+  }
+});
+
+// C. Get Sent Items
+app.get('/api/emails/sent/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const result = await pool.query(
+      `SELECT * FROM internal_emails WHERE sender_email = $1 ORDER BY created_at DESC`,
+      [email]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch sent items' });
+  }
+});
+
+// D. Mark Email as Read
+app.put('/api/emails/:id/read', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`UPDATE internal_emails SET is_read = TRUE WHERE id = $1`, [id]);
+    res.json({ message: 'Marked as read' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update email' });
+  }
+});
+
+// ==========================================
+// 4. START THE SERVER (RENDER PORT BINDING)
+// ==========================================
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server is running on port ${PORT}`);
