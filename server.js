@@ -1,19 +1,23 @@
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
+const multer = require('multer');
+const csv = require('csv-parser');
+const { Readable } = require('stream');
+const Parser = require('rss-parser');
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ==========================================
-// 1. DATABASE CONNECTION & INITIALIZATION
-// ==========================================
+const upload = multer({ storage: multer.memoryStorage() });
+const rssParser = new Parser();
+
+// 1. DATABASE CONNECTION
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('render.com') 
-    ? { rejectUnauthorized: false } : false
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('render.com') ? { rejectUnauthorized: false } : false
 });
 
 pool.connect((err, client, release) => {
@@ -21,106 +25,67 @@ pool.connect((err, client, release) => {
   else { console.log('✅ Connected to PostgreSQL'); release(); }
 });
 
-// Create Tables (Matters, Emails, and Verified Cases)
 pool.query(`
-  CREATE TABLE IF NOT EXISTS matters (
-      id SERIAL PRIMARY KEY, client_name VARCHAR(255), case_reference VARCHAR(100) UNIQUE, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS internal_emails (
-      id SERIAL PRIMARY KEY, sender_email VARCHAR(255), recipient_email VARCHAR(255), subject VARCHAR(255), body TEXT, matter_id INTEGER REFERENCES matters(id), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS verified_cases (
-      id SERIAL PRIMARY KEY, case_name VARCHAR(255) UNIQUE, citation VARCHAR(255), is_verified BOOLEAN DEFAULT TRUE
-  );
+  CREATE TABLE IF NOT EXISTS matters (id SERIAL PRIMARY KEY, client_name VARCHAR(255), case_reference VARCHAR(100) UNIQUE, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+  CREATE TABLE IF NOT EXISTS internal_emails (id SERIAL PRIMARY KEY, sender_email VARCHAR(255), recipient_email VARCHAR(255), subject VARCHAR(255), body TEXT, matter_id INTEGER REFERENCES matters(id), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+  CREATE TABLE IF NOT EXISTS verified_cases (id SERIAL PRIMARY KEY, case_name VARCHAR(500) UNIQUE, citation VARCHAR(255), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 `).then(() => console.log('✅ Tables Ready')).catch(err => console.error('DB Init Error:', err));
 
-// ==========================================
-// 2. MATTERS & EMAIL API
-// ==========================================
+// 2. MATTERS & EMAILS
 app.post('/api/matters', async (req, res) => {
-  try {
-    const { client_name, case_reference, description } = req.body;
-    const result = await pool.query(`INSERT INTO matters (client_name, case_reference, description) VALUES ($1, $2, $3) RETURNING *`, [client_name, case_reference, description]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: 'Failed to create matter' }); }
+  try { const { client_name, case_reference, description } = req.body; const result = await pool.query(`INSERT INTO matters (client_name, case_reference, description) VALUES ($1, $2, $3) RETURNING *`, [client_name, case_reference, description]); res.status(201).json(result.rows[0]); } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
-
 app.get('/api/matters', async (req, res) => {
-  try { const result = await pool.query(`SELECT * FROM matters ORDER BY created_at DESC`); res.json(result.rows); } 
-  catch (error) { res.status(500).json({ error: 'Failed to fetch matters' }); }
+  try { const result = await pool.query(`SELECT * FROM matters ORDER BY created_at DESC`); res.json(result.rows); } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
-
 app.post('/api/emails/send', async (req, res) => {
-  try {
-    const { sender_email, recipient_email, subject, body, matter_id } = req.body;
-    const result = await pool.query(`INSERT INTO internal_emails (sender_email, recipient_email, subject, body, matter_id) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [sender_email, recipient_email, subject, body, matter_id || null]);
-    res.status(201).json({ message: 'Email sent', email: result.rows[0] });
-  } catch (error) { res.status(500).json({ error: 'Failed to send email' }); }
+  try { const { sender_email, recipient_email, subject, body, matter_id } = req.body; const result = await pool.query(`INSERT INTO internal_emails (sender_email, recipient_email, subject, body, matter_id) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [sender_email, recipient_email, subject, body, matter_id || null]); res.status(201).json(result.rows[0]); } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// ==========================================
-// 3. THE AI DRAFTING & VERIFICATION ENGINE
-// ==========================================
-const systemPrompt = `You are an elite South African litigation attorney... [Keep your existing prompt here] ... 
-7. DISCLAIMER: At the very bottom, in plain text, add: "Draft generated by Onus Probandi AI. Requires attorney review and signature."`;
+// 3. LIVE RESEARCH & DATA FACTORY
+app.get('/api/cases', async (req, res) => {
+  try { const result = await pool.query(`SELECT * FROM verified_cases ORDER BY created_at DESC LIMIT 100`); res.json(result.rows); } catch (error) { res.status(500).json({ error: 'Failed' }); }
+});
+
+app.post('/api/sourcing-agent/sync', async (req, res) => {
+  try {
+    const feed = await rssParser.parseURL('https://www.courtlistener.com/feed/search/?q=South+Africa');
+    let newCasesAdded = 0;
+    for (const item of feed.items) {
+      if (item.title) {
+        const result = await pool.query(`INSERT INTO verified_cases (case_name, citation) VALUES ($1, $2) ON CONFLICT (case_name) DO NOTHING`, [item.title, item.link || 'Pending']);
+        if (result.rowCount > 0) newCasesAdded++;
+      }
+    }
+    res.json({ message: `Sourcing Agent complete! Pulled ${newCasesAdded} new cases automatically.` });
+  } catch (error) { res.status(500).json({ error: 'Failed to sync' }); }
+});
+
+// 4. AI DRAFTING & VERIFICATION
+const systemPrompt = `You are an elite South African litigation attorney. Draft pristine, ready-to-file documents. NO MARKDOWN FORMATTING (no asterisks, no hashtags, no hyphens). Use PLAIN TEXT ONLY. Use ALL CAPS for headings. Use [INSERT CASE NUMBER] for placeholders. Cite SA law accurately. Add disclaimer: "Draft generated by Onus Probandi AI. Requires attorney review."`;
 
 app.post('/api/analyze', async (req, res) => {
   try {
-    const { emailText, matter_id } = req.body;
-    if (!emailText) return res.status(400).json({ error: 'emailText is required' });
-
-    // 🧠 1. THE MEMORISING ENGINE
-    let memoryContext = "";
-    if (matter_id) {
-      const pastEmails = await pool.query(`SELECT subject, body FROM internal_emails WHERE matter_id = $1 ORDER BY created_at ASC LIMIT 5`, [matter_id]);
-      if (pastEmails.rows.length > 0) {
-        memoryContext = "\n\nPREVIOUS CONTEXT FOR THIS MATTER:\n" + pastEmails.rows.map(e => `Subject: ${e.subject}\nBody: ${e.body}`).join('\n---\n');
-      }
-    }
-
-    // Send to DeepSeek
+    const { emailText } = req.body;
     const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}` },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Context: ${memoryContext}\n\nTask: ${emailText}` }
-        ]
-      })
+      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: emailText }] })
     });
-
     const data = await response.json();
     const aiDraft = data.choices[0].message.content;
-
-    // 🛡️ 2. THE VERIFICATION ENGINE (PATENT LAYER)
+    
     let verificationResults = [];
-    // Look for patterns like "Smith v Jones 2024" or "Smith v Jones (Pty) Ltd"
     const citationRegex = /([A-Z][a-zA-Z\s]+ v [A-Z][a-zA-Z\s]+(\s\(Pty\)\sLtd)?\s\d{4})/g;
     const extractedCitations = aiDraft.match(citationRegex) || [];
-
     for (const citation of extractedCitations) {
       const dbCheck = await pool.query(`SELECT * FROM verified_cases WHERE case_name ILIKE $1`, [`%${citation.trim()}%`]);
-      if (dbCheck.rows.length === 0) {
-        verificationResults.push({ citation: citation.trim(), status: 'UNVERIFIED', message: '⚠️ Warning: This citation is not in the Onus Probandi verified database.' });
-      } else {
-        verificationResults.push({ citation: citation.trim(), status: 'VERIFIED', message: '✅ Verified.' });
-      }
+      if (dbCheck.rows.length === 0) verificationResults.push({ citation: citation.trim(), status: 'UNVERIFIED', message: '⚠️ Warning: Citation not verified.' });
+      else verificationResults.push({ citation: citation.trim(), status: 'VERIFIED', message: '✅ Verified.' });
     }
-
-    // Send back the draft AND the verification warnings
-    res.json({
-      draft: aiDraft,
-      citations: verificationResults,
-      memory_used: memoryContext ? true : false
-    });
-
-  } catch (error) {
-    console.error('❌ Error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
+    res.json({ draft: aiDraft, citations: verificationResults });
+  } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server running on ${PORT}`));
