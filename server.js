@@ -5,7 +5,6 @@ const multer = require('multer');
 const csv = require('csv-parser');
 const { Readable } = require('stream');
 const Parser = require('rss-parser');
-const OpenAI = require('openai');
 require('dotenv').config();
 
 const app = express();
@@ -14,9 +13,6 @@ app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
 const rssParser = new Parser();
-
-// OpenAI setup for Voice Transcription
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ==========================================
 // 1. DATABASE CONNECTION & TABLES
@@ -111,6 +107,7 @@ CRITICAL DRAFTING RULES:
 
 app.get('/', (req, res) => res.send('Onus Probandi Engine Live'));
 
+// Existing AI Drafting Route
 app.post('/api/analyze', async (req, res) => {
     try {
         const { emailText, matter_id, firm_voice } = req.body;
@@ -144,7 +141,7 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 // ==========================================
-// 5. AI MEETING EMAIL DRAFTER
+// 5. NEW: AI MEETING EMAIL DRAFTER
 // ==========================================
 app.post('/api/ai/draft-meeting-email', async (req, res) => {
     const { recipientName, meetingTime, topics, format } = req.body;
@@ -178,27 +175,12 @@ app.post('/api/ai/draft-meeting-email', async (req, res) => {
 });
 
 // ==========================================
-// 6. VOICE-TO-TEXT TRANSCRIPTION (Whisper API)
+// 6. VOICE-TO-TEXT (Placeholder - Safe Mode)
 // ==========================================
+// We have temporarily disabled the OpenAI transcription here so your server doesn't crash.
+// The server will stay online, but voice won't work until we hook it up properly.
 app.post('/api/ai/transcribe', upload.single('audio'), async (req, res) => {
-    try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No audio file provided.' });
-        }
-
-        const file = await OpenAI.toFile(req.file.buffer, 'audio.webm', { type: req.file.mimetype });
-
-        const transcription = await openai.audio.transcriptions.create({
-            file: file,
-            model: "whisper-1",
-        });
-
-        res.json({ text: transcription.text });
-
-    } catch (error) {
-        console.error("Transcription Error:", error);
-        res.status(500).json({ error: 'Failed to transcribe audio.' });
-    }
+    res.status(501).json({ error: 'Voice transcription requires a separate API configuration. This feature is coming soon.' });
 });
 
 // ==========================================
