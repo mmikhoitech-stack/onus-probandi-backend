@@ -5,6 +5,7 @@ const multer = require('multer');
 const csv = require('csv-parser');
 const { Readable } = require('stream');
 const Parser = require('rss-parser');
+const OpenAI = require('openai');
 require('dotenv').config();
 
 const app = express();
@@ -13,6 +14,9 @@ app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
 const rssParser = new Parser();
+
+// OpenAI setup for Voice Transcription
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ==========================================
 // 1. DATABASE CONNECTION & TABLES
@@ -28,7 +32,6 @@ pool.connect((err, client, release) => {
     else { console.log('✅ Connected to PostgreSQL'); release(); }
 });
 
-// UPGRADE: Added 'preferred_tone' to matters table
 pool.query('CREATE TABLE IF NOT EXISTS matters (id SERIAL PRIMARY KEY, client_name VARCHAR(255) NOT NULL, case_reference VARCHAR(255), description TEXT, preferred_tone VARCHAR(50) DEFAULT \'Standard\', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
     .then(() => console.log('✅ Matters table ready')).catch(err => console.error(err));
 
@@ -39,7 +42,7 @@ pool.query('CREATE TABLE IF NOT EXISTS verified_cases (id SERIAL PRIMARY KEY, ca
     .then(() => console.log('✅ Vault table ready')).catch(err => console.error(err));
 
 // ==========================================
-// 2. MATTER SPACES API (Updated for Tones)
+// 2. MATTER SPACES API
 // ==========================================
 app.post('/api/matters', async (req, res) => {
     try {
@@ -108,7 +111,6 @@ CRITICAL DRAFTING RULES:
 
 app.get('/', (req, res) => res.send('Onus Probandi Engine Live'));
 
-// AI Drafting Route (Existing)
 app.post('/api/analyze', async (req, res) => {
     try {
         const { emailText, matter_id, firm_voice } = req.body;
@@ -142,7 +144,7 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 // ==========================================
-// 5. NEW: AI MEETING EMAIL DRAFTER (Added for the Dashboard)
+// 5. AI MEETING EMAIL DRAFTER
 // ==========================================
 app.post('/api/ai/draft-meeting-email', async (req, res) => {
     const { recipientName, meetingTime, topics, format } = req.body;
@@ -176,7 +178,31 @@ app.post('/api/ai/draft-meeting-email', async (req, res) => {
 });
 
 // ==========================================
-// 5. START SERVER
+// 6. VOICE-TO-TEXT TRANSCRIPTION (Whisper API)
+// ==========================================
+app.post('/api/ai/transcribe', upload.single('audio'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No audio file provided.' });
+        }
+
+        const file = await OpenAI.toFile(req.file.buffer, 'audio.webm', { type: req.file.mimetype });
+
+        const transcription = await openai.audio.transcriptions.create({
+            file: file,
+            model: "whisper-1",
+        });
+
+        res.json({ text: transcription.text });
+
+    } catch (error) {
+        console.error("Transcription Error:", error);
+        res.status(500).json({ error: 'Failed to transcribe audio.' });
+    }
+});
+
+// ==========================================
+// 7. START SERVER
 // ==========================================
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server on port ${PORT}`));
