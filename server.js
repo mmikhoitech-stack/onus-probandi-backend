@@ -140,7 +140,7 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 // ==========================================
-// 5. AI MEETING EMAIL DRAFTER (Fixed POPIA)
+// 5. AI MEETING EMAIL DRAFTER
 // ==========================================
 app.post('/api/ai/draft-meeting-email', async (req, res) => {
     const { recipientName, meetingTime, topics, format } = req.body;
@@ -184,7 +184,6 @@ app.post('/api/ai/transcribe', upload.single('audio'), async (req, res) => {
             return res.status(400).json({ error: 'OPENAI_API_KEY is missing in Render environment variables.' });
         }
         
-        // Only require OpenAI if the key exists (prevents server crash on startup)
         const OpenAI = require('openai');
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
