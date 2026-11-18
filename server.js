@@ -107,7 +107,6 @@ CRITICAL DRAFTING RULES:
 
 app.get('/', (req, res) => res.send('Onus Probandi Engine Live'));
 
-// Existing AI Drafting Route
 app.post('/api/analyze', async (req, res) => {
     try {
         const { emailText, matter_id, firm_voice } = req.body;
@@ -141,7 +140,7 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 // ==========================================
-// 5. NEW: AI MEETING EMAIL DRAFTER
+// 5. AI MEETING EMAIL DRAFTER (Fixed POPIA)
 // ==========================================
 app.post('/api/ai/draft-meeting-email', async (req, res) => {
     const { recipientName, meetingTime, topics, format } = req.body;
@@ -151,7 +150,9 @@ app.post('/api/ai/draft-meeting-email', async (req, res) => {
     }
 
     try {
-        const meetingPrompt = `Draft a professional email to ${recipientName} for a meeting at ${meetingTime}. The meeting format is ${format}. The topics to discuss are: ${topics}. Include a POPIA compliance clause.`;
+        const meetingPrompt = `Draft a professional email to ${recipientName} for a meeting at ${meetingTime}. The meeting format is ${format}. The topics to discuss are: ${topics}. 
+        
+        You MUST include this exact text for the POPIA clause: "Please note that, in line with the Protection of Personal Information Act, 4 of 2013 (POPIA), any personal information you share with me will be processed solely for the purpose of this meeting and related correspondence, and will be handled with appropriate confidentiality and security safeguards."`;
 
         const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
             method: 'POST',
@@ -175,12 +176,35 @@ app.post('/api/ai/draft-meeting-email', async (req, res) => {
 });
 
 // ==========================================
-// 6. VOICE-TO-TEXT (Placeholder - Safe Mode)
+// 6. VOICE-TO-TEXT TRANSCRIPTION (Safe Mode)
 // ==========================================
-// We have temporarily disabled the OpenAI transcription here so your server doesn't crash.
-// The server will stay online, but voice won't work until we hook it up properly.
 app.post('/api/ai/transcribe', upload.single('audio'), async (req, res) => {
-    res.status(501).json({ error: 'Voice transcription requires a separate API configuration. This feature is coming soon.' });
+    try {
+        if (!process.env.OPENAI_API_KEY) {
+            return res.status(400).json({ error: 'OPENAI_API_KEY is missing in Render environment variables.' });
+        }
+        
+        // Only require OpenAI if the key exists (prevents server crash on startup)
+        const OpenAI = require('openai');
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'No audio file provided.' });
+        }
+
+        const file = await OpenAI.toFile(req.file.buffer, 'audio.webm', { type: req.file.mimetype });
+
+        const transcription = await openai.audio.transcriptions.create({
+            file: file,
+            model: "whisper-1",
+        });
+
+        res.json({ text: transcription.text });
+
+    } catch (error) {
+        console.error("Transcription Error:", error);
+        res.status(500).json({ error: 'Failed to transcribe audio.' });
+    }
 });
 
 // ==========================================
