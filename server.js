@@ -2,74 +2,95 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
-const { randomBytes } = require('crypto'); // Assuming this was the 'random' import
+const multer = require('multer');
+const Groq = require('groq-sdk');
+const PDFDocument = require('pdfkit');
 
 const app = express();
-
-// Middleware
 app.use(cors());
-app.use(express.json()); // Parses incoming JSON payloads
+app.use(express.json());
 
-// Render dynamically assigns a port, fallback to 10000 for local testing
 const port = process.env.PORT || 10000;
 
-// --- NODEMAILER SETUP ---
-// You will need to add these variables in your Render Environment Variables
+// --- SETUP MULTER (For handling audio uploads in memory) ---
+const upload = multer({ storage: multer.memoryStorage() });
+
+// --- SETUP GROQ (Using your existing environment variable) ---
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+// --- YOUR EMAIL ROUTE (Keep this) ---
 const transporter = nodemailer.createTransport({
-host: process.env.SMTP_HOST || 'smtp.gmail.com',
-port: process.env.SMTP_PORT || 587,
-secure: false, // true for 465, false for other ports
-auth: {
-user: process.env.SMTP_USER,
-pass: process.env.SMTP_PASS,
-},
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: process.env.SMTP_PORT || 587,
+    secure: false,
+    auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+    },
 });
 
-// --- ROUTES ---
-
-// Health Check Route (Good for testing if the server is up)
-app.get('/', (req, res) => {
-res.status(200).json({ status: 'success', message: 'Onus Probandi API is running.' });
-});
-
-// Example Route: Send Email
 app.post('/api/send-email', async (req, res) => {
-try {
-const { to, subject, text } = req.body;
-
-if (!to || !subject || !text) {
-return res.status(400).json({ error: 'Missing required fields (to, subject, text)' });
-}
-
-const mailOptions = {
-from: process.env.SMTP_USER,
-to: to,
-subject: subject,
-text: text,
-};
-
-const info = await transporter.sendMail(mailOptions);
-
-res.status(200).json({
-status: 'success',
-message: 'Email sent successfully',
-messageId: info.messageId
-});
-} catch (error) {
-console.error('Email Error:', error);
-res.status(500).json({ error: 'Failed to send email' });
-}
+    try {
+        const { to, subject, text } = req.body;
+        await transporter.sendMail({ from: process.env.SMTP_USER, to, subject, text });
+        res.status(200).json({ status: 'success', message: 'Email sent' });
+    } catch (error) {
+        console.error('Email Error:', error);
+        res.status(500).json({ error: 'Failed to send email' });
+    }
 });
 
-// Example Route: Generate Random Token (Using the crypto import)
-app.get('/api/generate-token', (req, res) => {
-const token = randomBytes(16).toString('hex');
-res.status(200).json({ token });
+// --- NEW VOICE TO PDF ROUTE ---
+app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No audio file uploaded' });
+        }
+
+        console.log("Audio received, transcribing with Groq...");
+
+        // 1. Send audio to Groq for transcription
+        const transcription = await groq.audio.transcriptions.create({
+            file: req.file.buffer,
+            model: "whisper-large-v3",
+            response_format: "json",
+        });
+
+        const transcribedText = transcription.text;
+        console.log("Transcription complete. Generating PDF...");
+
+        // 2. Create the PDF
+        const doc = new PDFDocument();
+        
+        // Set headers so the browser knows it's downloading a PDF
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="transcribed-document.pdf"');
+
+        // Pipe the PDF directly to the response
+        doc.pipe(res);
+
+        // Add content to PDF
+        doc.fontSize(16).text('Onus Probandi - Voice to PDF', { align: 'center' });
+        doc.moveDown();
+        doc.fontSize(12).text(transcribedText, {
+            align: 'left',
+            lineGap: 5
+        });
+
+        // Finalize the PDF
+        doc.end();
+
+    } catch (error) {
+        console.error('Voice to PDF Error:', error);
+        res.status(500).json({ error: 'Failed to process audio and generate PDF' });
+    }
 });
 
+// Health check
+app.get('/', (req, res) => {
+    res.status(200).json({ status: 'success', message: 'Onus Probandi API is running.' });
+});
 
-// --- START SERVER ---
-// IMPORTANT: Render requires '0.0.0.0' as the host
 app.listen(port, '0.0.0.0', () => {
-console.log(`Server is running on port ${port}`);
+    console.log(`Server is running on port ${port}`);
 });
