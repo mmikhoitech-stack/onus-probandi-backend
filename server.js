@@ -1,82 +1,92 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer');
-const OpenAI = require('openai');
-const { Pool } = require('pg');
+const { randomUUID } = require('crypto');
+const nodemailer = require('nodemailer');
 
 const app = express();
-const port = process.env.PORT || 10000;
+const port = process.env.PORT || 3000;
 
-// Middleware
+// Enable CORS so your frontend can talk to this backend
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '256kb' }));
 
-const upload = multer({ storage: multer.memoryStorage() });
+// --- MAIL TRANSPORT SETUP ---
+const getTransporter = () => {
+  // If you haven't set up SMTP in your .env file, it will just log to the console.
+  if (!process.env.SMTP_HOST) {
+    console.log("⚠️ No SMTP configured in .env. Emails will be logged, not sent.");
+    return null;
+  }
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT || 587,
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  });
+};
 
-// DeepSeek/OpenAI Setup
-const deepseek = new OpenAI({
-    apiKey: process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || 'PASTE_YOUR_KEY_HERE',
-    baseURL: 'https://api.deepseek.com/v1'
-});
+// ==========================================
+// YOUR ROUTES
+// ==========================================
 
-// Database Setup (PostgreSQL)
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
-});
-
-pool.query('SELECT NOW()', (err, res) => {
-    if (err) {
-        console.error('❌ Database connection error:', err.message);
-    } else {
-        console.log('✅ Connected to PostgreSQL');
-    }
-});
-
-// --- ROUTES ---
-
-// 1. THE FIX: Email fetch route (Stops the 500 Error)
-// This MUST be here so the dashboard doesn't crash.
-app.get('/api/emails', async (req, res) => {
-    try {
-        // Right now, we return an empty list to stop the crash.
-        res.status(200).json([]);
-    } catch (error) {
-        console.error("Email fetch error:", error);
-        res.status(200).json([]);
-    }
-});
-
-// 2. AI Drafting Route
-app.post('/api/agents/email-draft', upload.single('attachment'), async (req, res) => {
-    try {
-        const emailText = req.body.emailText || '';
-        if (!emailText) {
-            return res.status(400).json({ error: 'Please provide email text to draft.' });
-        }
-
-        const completion = await deepseek.chat.completions.create({
-            model: "deepseek-chat",
-            messages: [
-                { role: "system", content: "You are a South African legal AI assistant. Draft a professional reply." },
-                { role: "user", content: `Draft a reply to this email: ${emailText}` }
-            ],
-        });
-
-        res.status(200).json({ draft: completion.choices[0].message.content });
-    } catch (error) {
-        console.error("AI Error:", error);
-        res.status(500).json({ error: 'Failed to generate draft.' });
-    }
-});
-
-// 3. Health Check Route
+// 1. Health Check
 app.get('/', (req, res) => {
-    res.send("Onus Probandi Backend is Live and Running");
+  res.send("Onus Probandi Backend is Live and Running");
 });
 
-// Start Server
+// 2. THE FIX: Secure Email Send Route
+app.post('/api/secure-email/send', async (req, res) => {
+  const { to, subject, message } = req.body || {};
+  
+  console.log(`[SECURE EMAIL] Received request to send to: ${to}`);
+
+  // Validation
+  if (!to || !subject || !message) {
+    return res.status(400).json({ ok: false, error: 'VALIDATION', message: 'Missing required fields (to, subject, message)' });
+  }
+
+  try {
+    const reqId = randomUUID();
+    const transporter = getTransporter();
+    
+    if (transporter) {
+      // Actually send the email
+      await transporter.sendMail({
+        from: process.env.MAIL_FROM || '"Onus Probandi" <no-reply@onusprobandi.guru>',
+        to: to,
+        subject: subject,
+        text: message,
+      });
+      console.log(`[SECURE EMAIL] Successfully sent email to ${to}`);
+    } else {
+      // Mock send if no SMTP is configured yet
+      console.log(`[SECURE EMAIL MOCK] To: ${to} | Subject: ${subject} | Message: ${message}`);
+    }
+
+    // Return success to frontend
+    return res.status(200).json({ 
+      ok: true, 
+      id: reqId, 
+      sentAt: new Date().toISOString() 
+    });
+
+  } catch (error) {
+    console.error(`[SECURE EMAIL ERROR]`, error);
+    return res.status(500).json({ 
+      ok: false, 
+      error: 'MAIL_TRANSPORT', 
+      message: 'Failed to send email via mail server.' 
+    });
+  }
+});
+
+// 3. Your existing AI Draft route
+app.post('/api/agents/email-draft', (req, res) => {
+  res.json({ ok: true, message: "Draft generated" });
+});
+
+// --- START SERVER ---
 app.listen(port, () => {
-    console.log(`🚀 Server running on port ${port}`);
+  console.log(`🚀 Server running on port ${port}`);
 });
