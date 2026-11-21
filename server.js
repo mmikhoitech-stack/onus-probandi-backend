@@ -5,6 +5,7 @@ const nodemailer = require('nodemailer');
 const multer = require('multer');
 const Groq = require('groq-sdk');
 const PDFDocument = require('pdfkit');
+const { Readable } = require('stream');
 
 const app = express();
 app.use(cors());
@@ -13,12 +14,15 @@ app.use(express.json());
 const port = process.env.PORT || 10000;
 
 // --- SETUP MULTER (For handling audio uploads in memory) ---
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024 } // Limit to 25MB to prevent memory crashes
+});
 
 // --- SETUP GROQ (Using your existing environment variable) ---
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// --- YOUR EMAIL ROUTE (Keep this) ---
+// --- EMAIL ROUTE ---
 const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: process.env.SMTP_PORT || 587,
@@ -40,7 +44,7 @@ app.post('/api/send-email', async (req, res) => {
     }
 });
 
-// --- NEW VOICE TO PDF ROUTE ---
+// --- FULL VOICE TO PDF ROUTE ---
 app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
     try {
         if (!req.file) {
@@ -49,9 +53,14 @@ app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
 
         console.log("Audio received, transcribing with Groq...");
 
+        // Convert buffer to a stream for Groq (Fixes some Node/Groq compatibility issues)
+        const audioStream = Readable.from(req.file.buffer);
+        // Groq needs a filename to know the format. We pass the original name or default to webm.
+        audioStream.path = req.file.originalname || 'audio.webm'; 
+
         // 1. Send audio to Groq for transcription
         const transcription = await groq.audio.transcriptions.create({
-            file: req.file.buffer,
+            file: audioStream,
             model: "whisper-large-v3",
             response_format: "json",
         });
@@ -64,15 +73,15 @@ app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
         
         // Set headers so the browser knows it's downloading a PDF
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'attachment; filename="transcribed-document.pdf"');
+        res.setHeader('Content-Disposition', 'attachment; filename="onus-probandi-document.pdf"');
 
         // Pipe the PDF directly to the response
         doc.pipe(res);
 
-        // Add content to PDF
-        doc.fontSize(16).text('Onus Probandi - Voice to PDF', { align: 'center' });
+        // Add content to PDF (Using Times-Roman to prevent font crashes on Render)
+        doc.font('Times-Roman').fontSize(18).text('Onus Probandi - Voice to PDF', { align: 'center' });
         doc.moveDown();
-        doc.fontSize(12).text(transcribedText, {
+        doc.font('Times-Roman').fontSize(12).text(transcribedText, {
             align: 'left',
             lineGap: 5
         });
@@ -82,7 +91,10 @@ app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
 
     } catch (error) {
         console.error('Voice to PDF Error:', error);
-        res.status(500).json({ error: 'Failed to process audio and generate PDF' });
+        // If the PDF hasn't started streaming yet, send an error response
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to process audio and generate PDF' });
+        }
     }
 });
 
