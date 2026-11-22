@@ -13,16 +13,16 @@ app.use(express.json());
 
 const port = process.env.PORT || 10000;
 
-// --- SETUP MULTER ---
+// --- SETUP MULTER (For handling audio uploads in memory) ---
 const upload = multer({ 
     storage: multer.memoryStorage(),
     limits: { fileSize: 25 * 1024 * 1024 } 
 });
 
-// --- SETUP GROQ ---
+// --- SETUP GROQ (For Voice-to-PDF) ---
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// --- SETUP RESEND (For Email) ---
+// --- SETUP RESEND (For Secure Email) ---
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 // --- EMAIL ROUTE ---
@@ -33,7 +33,7 @@ app.post('/api/send-email', async (req, res) => {
         console.log("Attempting to send email to:", to);
 
         const data = await resend.emails.send({
-            from: 'Onus Probandi <onboarding@resend.dev>', // You can change this later
+            from: 'Onus Probandi <notifications@onusprobandi.guru>', // Updated to your verified domain
             to: [to],
             subject: subject,
             text: text,
@@ -92,11 +92,12 @@ app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
     }
 });
 
-// Health check
+// --- HEALTH CHECK ROUTE ---
 app.get('/', (req, res) => {
     res.status(200).json({ status: 'success', message: 'Onus Probandi API is running.' });
 });
 
+// --- START SERVER ---
 app.listen(port, '0.0.0.0', () => {
     console.log(`Server is running on port ${port}`);
 });
