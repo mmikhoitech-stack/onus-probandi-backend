@@ -14,7 +14,9 @@
     "resend": "^3.2.0",
     "multer": "^1.4.5-lts.1",
     "groq-sdk": "^0.3.2",
-    "pdfkit": "^0.14.0"
+    "pdfkit": "^0.14.0",
+    "openai": "^4.28.0",
+    "@supabase/supabase-js": "^2.39.0"
   },
   "engines": {
     "node": ">=18.0.0"
