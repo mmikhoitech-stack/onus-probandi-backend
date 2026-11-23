@@ -20,7 +20,6 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Optional: These will only work if you add the keys to Render
 const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_KEY 
     ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY) 
     : null;
@@ -33,15 +32,12 @@ const openai = process.env.OPENAI_API_KEY
 app.post('/api/send-email', async (req, res) => {
     try {
         const { to, subject, text } = req.body;
-        const data = await resend.emails.send({
+        await resend.emails.send({
             from: 'Onus Probandi <notifications@onusprobandi.guru>',
-            to: [to],
-            subject: subject,
-            text: text,
+            to: [to], subject: subject, text: text,
         });
         res.status(200).json({ status: 'success', message: 'Email sent' });
     } catch (error) {
-        console.error('Email Error:', error);
         res.status(500).json({ error: 'Failed to send email' });
     }
 });
@@ -54,9 +50,7 @@ app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
         audioStream.path = req.file.originalname || 'audio.webm'; 
 
         const transcription = await groq.audio.transcriptions.create({
-            file: audioStream,
-            model: "whisper-large-v3",
-            response_format: "json",
+            file: audioStream, model: "whisper-large-v3", response_format: "json",
         });
 
         const doc = new PDFDocument();
@@ -68,7 +62,6 @@ app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
         doc.font('Times-Roman').fontSize(12).text(transcription.text, { align: 'left', lineGap: 5 });
         doc.end();
     } catch (error) {
-        console.error('Voice to PDF Error:', error);
         if (!res.headersSent) res.status(500).json({ error: 'Failed to process audio' });
     }
 });
@@ -77,18 +70,11 @@ app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
 app.post('/api/tabular-review', async (req, res) => {
     try {
         const { documents, columns } = req.body;
-        if (!documents || !columns) return res.status(400).json({ error: 'Documents and columns required' });
-
-        const prompt = `You are a South African legal AI. Analyze the following documents and extract the requested info for EACH document. Return ONLY a valid JSON array. No markdown formatting.
-        Columns: ${JSON.stringify(columns)}
-        Documents: ${documents.map((doc, i) => `--- DOC ${i+1} ---\n${doc}`).join('\n\n')}`;
-
+        const prompt = `Analyze these documents and extract: ${JSON.stringify(columns)}. Return ONLY a JSON array. Documents: ${documents.join('\n\n')}`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama3-70b-8192",
-            temperature: 0.1,
+            model: "llama3-70b-8192", temperature: 0.1,
         });
-
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
         res.status(200).json({ status: 'success', table_data: JSON.parse(rawResponse) });
     } catch (error) {
@@ -100,14 +86,11 @@ app.post('/api/tabular-review', async (req, res) => {
 app.post('/api/agent-intake', async (req, res) => {
     try {
         const { request_text } = req.body;
-        const prompt = `You are the Onus Probandi Intake Agent. Read this request and return ONLY valid JSON with keys: "priority" (High/Medium/Low), "missing_info" (array), "draft_response" (string). Request: "${request_text}"`;
-
+        const prompt = `Read this request: "${request_text}". Return ONLY JSON with keys: "priority" (High/Medium/Low), "missing_info" (array), "draft_response" (string).`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama3-70b-8192",
-            temperature: 0.2,
+            model: "llama3-70b-8192", temperature: 0.2,
         });
-
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
         res.status(200).json({ status: 'success', intake_result: JSON.parse(rawResponse) });
     } catch (error) {
@@ -119,14 +102,11 @@ app.post('/api/agent-intake', async (req, res) => {
 app.post('/api/workflow-draft', async (req, res) => {
     try {
         const { goal } = req.body;
-        const prompt = `You are a legal workflow architect. Generate a step-by-step workflow for: "${goal}". Return ONLY a JSON array with "step_number" and "instruction".`;
-
+        const prompt = `Generate a step-by-step legal workflow for: "${goal}". Return ONLY a JSON array with "step_number" and "instruction".`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama3-70b-8192",
-            temperature: 0.3,
+            model: "llama3-70b-8192", temperature: 0.3,
         });
-
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
         res.status(200).json({ status: 'success', workflow: JSON.parse(rawResponse) });
     } catch (error) {
@@ -137,33 +117,19 @@ app.post('/api/workflow-draft', async (req, res) => {
 // --- 6. DEEP LEGAL RESEARCH (RAG) ---
 app.post('/api/deep-research', async (req, res) => {
     try {
-        if (!supabase || !openai) return res.status(500).json({ error: 'Database or OpenAI not configured in environment variables.' });
-
+        if (!supabase || !openai) return res.status(500).json({ error: 'Database or OpenAI not configured.' });
         const { query } = req.body;
         const embeddingResponse = await openai.embeddings.create({ model: "text-embedding-3-small", input: query });
         const { data: documents, error } = await supabase.rpc('match_documents', {
-            query_embedding: embeddingResponse.data[0].embedding,
-            match_threshold: 0.5,
-            match_count: 5,
+            query_embedding: embeddingResponse.data[0].embedding, match_threshold: 0.5, match_count: 5,
         });
-
         if (error) throw error;
         let contextText = documents.map(doc => doc.content).join('\n\n---\n\n') || "No specific SA case law found.";
-
         const chatCompletion = await groq.chat.completions.create({
-            messages: [
-                { role: "system", content: `You are Onus Probandi. Answer ONLY using this context: \n\n${contextText}` },
-                { role: "user", content: query }
-            ],
-            model: "llama3-70b-8192",
-            temperature: 0.2,
+            messages: [{ role: "system", content: `Answer ONLY using this context: \n\n${contextText}` }, { role: "user", content: query }],
+            model: "llama3-70b-8192", temperature: 0.2,
         });
-
-        res.status(200).json({ 
-            status: 'success', 
-            answer: chatCompletion.choices[0]?.message?.content,
-            sources_used: documents.map(d => d.metadata)
-        });
+        res.status(200).json({ status: 'success', answer: chatCompletion.choices[0]?.message?.content, sources_used: documents.map(d => d.metadata) });
     } catch (error) {
         res.status(500).json({ error: 'Failed to process deep research' });
     }
@@ -173,22 +139,67 @@ app.post('/api/deep-research', async (req, res) => {
 app.post('/api/verify-citation', async (req, res) => {
     try {
         if (!supabase) return res.status(500).json({ error: 'Database not configured.' });
-
-        const { citation, ai_claim } = req.body;
+        const { citation } = req.body;
         const { data: cases } = await supabase.from('legal_documents').select('*').ilike('metadata->>citation', `%${citation}%`).limit(1);
-
-        if (!cases || cases.length === 0) {
-            return res.status(200).json({ status: 'flagged', reason: 'Citation not found. Possible hallucination.' });
-        }
-
-        const foundCase = cases[0];
-        if (foundCase.metadata?.status === 'overruled') {
-            return res.status(200).json({ status: 'flagged', reason: 'Case is overruled.' });
-        }
-
-        res.status(200).json({ status: 'verified', reason: 'Citation exists and is good law.', case_name: foundCase.metadata?.case_name });
+        if (!cases || cases.length === 0) return res.status(200).json({ status: 'flagged', reason: 'Citation not found.' });
+        if (cases[0].metadata?.status === 'overruled') return res.status(200).json({ status: 'flagged', reason: 'Case is overruled.' });
+        res.status(200).json({ status: 'verified', reason: 'Citation exists and is good law.', case_name: cases[0].metadata?.case_name });
     } catch (error) {
         res.status(500).json({ error: 'Failed to audit citation' });
+    }
+});
+
+// --- 8. THE VAULT (UPLOAD & INDEX DOCUMENTS) ---
+app.post('/api/vault/upload', upload.single('document'), async (req, res) => {
+    try {
+        if (!supabase || !openai) return res.status(500).json({ error: 'Database/OpenAI not configured.' });
+        if (!req.file) return res.status(400).json({ error: 'No document uploaded' });
+
+        const textContent = req.file.buffer.toString('utf-8'); // Assuming text/markdown for now
+        const embeddingResponse = await openai.embeddings.create({ model: "text-embedding-3-small", input: textContent });
+
+        const { data, error } = await supabase.from('legal_documents').insert([{
+            content: textContent,
+            metadata: { filename: req.file.originalname, type: 'vault_upload', date: new Date() },
+            embedding: embeddingResponse.data[0].embedding
+        }]);
+
+        if (error) throw error;
+        res.status(200).json({ status: 'success', message: 'Document added to Vault', id: data[0].id });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to upload to Vault' });
+    }
+});
+
+// --- 9. INTEGRATION ECOSYSTEM (iManage / NetDocs Mock) ---
+app.get('/api/integrations/imanage/documents', async (req, res) => {
+    // MOCK: In reality, this would use axios to call the iManage API with OAuth tokens.
+    // For now, return mock data so the frontend can be built.
+    res.status(200).json({ 
+        status: 'success', 
+        provider: 'iManage (Mock)', 
+        documents: [
+            { id: 'doc_001', name: 'NDA_Acme_Corp.pdf', matter: 'Matter-2023-89' },
+            { id: 'doc_002', name: 'Affidavit_Smith_v_Jones.docx', matter: 'Matter-2024-12' }
+        ]
+    });
+});
+
+// --- 10. MEMORY LAYER (Save User Style) ---
+app.post('/api/memory/style', async (req, res) => {
+    try {
+        if (!supabase) return res.status(500).json({ error: 'Database not configured.' });
+        const { user_id, style_prompt } = req.body; // e.g., "Write formally, use UK English, favor concise arguments."
+        
+        const { error } = await supabase.from('user_preferences').upsert({ 
+            user_id: user_id, 
+            style_prompt: style_prompt 
+        });
+        
+        if (error) throw error;
+        res.status(200).json({ status: 'success', message: 'Drafting style saved.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to save style' });
     }
 });
 
