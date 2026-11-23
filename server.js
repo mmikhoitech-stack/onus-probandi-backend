@@ -154,16 +154,13 @@ app.post('/api/vault/upload', upload.single('document'), async (req, res) => {
     try {
         if (!supabase || !openai) return res.status(500).json({ error: 'Database/OpenAI not configured.' });
         if (!req.file) return res.status(400).json({ error: 'No document uploaded' });
-
-        const textContent = req.file.buffer.toString('utf-8'); // Assuming text/markdown for now
+        const textContent = req.file.buffer.toString('utf-8');
         const embeddingResponse = await openai.embeddings.create({ model: "text-embedding-3-small", input: textContent });
-
         const { data, error } = await supabase.from('legal_documents').insert([{
             content: textContent,
             metadata: { filename: req.file.originalname, type: 'vault_upload', date: new Date() },
             embedding: embeddingResponse.data[0].embedding
         }]);
-
         if (error) throw error;
         res.status(200).json({ status: 'success', message: 'Document added to Vault', id: data[0].id });
     } catch (error) {
@@ -173,8 +170,6 @@ app.post('/api/vault/upload', upload.single('document'), async (req, res) => {
 
 // --- 9. INTEGRATION ECOSYSTEM (iManage / NetDocs Mock) ---
 app.get('/api/integrations/imanage/documents', async (req, res) => {
-    // MOCK: In reality, this would use axios to call the iManage API with OAuth tokens.
-    // For now, return mock data so the frontend can be built.
     res.status(200).json({ 
         status: 'success', 
         provider: 'iManage (Mock)', 
@@ -189,17 +184,43 @@ app.get('/api/integrations/imanage/documents', async (req, res) => {
 app.post('/api/memory/style', async (req, res) => {
     try {
         if (!supabase) return res.status(500).json({ error: 'Database not configured.' });
-        const { user_id, style_prompt } = req.body; // e.g., "Write formally, use UK English, favor concise arguments."
-        
+        const { user_id, style_prompt } = req.body;
         const { error } = await supabase.from('user_preferences').upsert({ 
             user_id: user_id, 
             style_prompt: style_prompt 
         });
-        
         if (error) throw error;
         res.status(200).json({ status: 'success', message: 'Drafting style saved.' });
     } catch (error) {
         res.status(500).json({ error: 'Failed to save style' });
+    }
+});
+
+// --- 11. DRAFT DOCUMENT (NEW ROUTE FOR THE BUTTON) ---
+app.post('/api/draft-document', async (req, res) => {
+    try {
+        const { matter, firm_voice, instructions } = req.body;
+        
+        const prompt = `You are a South African legal AI drafting assistant. 
+        Draft a legal document based on the following instructions. 
+        
+        Matter: ${matter || 'General'}
+        Firm Voice: ${firm_voice || 'Standard'}
+        Instructions: ${instructions || 'Draft a standard legal document.'}
+        
+        Provide a professional, court-ready draft. Include placeholders like [CLIENT NAME] where information is missing.`;
+
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [{ role: "user", content: prompt }],
+            model: "llama3-70b-8192",
+            temperature: 0.3,
+        });
+
+        const draft = chatCompletion.choices[0]?.message?.content;
+        res.status(200).json({ status: 'success', draft: draft });
+    } catch (error) {
+        console.error('Draft Document Error:', error);
+        res.status(500).json({ error: 'Failed to generate draft' });
     }
 });
 
