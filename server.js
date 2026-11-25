@@ -8,7 +8,7 @@ const { Readable } = require('stream');
 const { Resend } = require('resend');
 const { createClient } = require('@supabase/supabase-js');
 const OpenAI = require('openai');
-const pdfParse = require('pdf-parse'); // ADDED FOR LUDUS
+const pdfParse = require('pdf-parse'); 
 
 const app = express();
 app.use(cors());
@@ -197,77 +197,41 @@ app.post('/api/memory/style', async (req, res) => {
     }
 });
 
-// --- 11. DRAFT DOCUMENT (NEW ROUTE FOR THE BUTTON) ---
+// --- 11. DRAFT DOCUMENT ---
 app.post('/api/draft-document', async (req, res) => {
     try {
         const { matter, firm_voice, instructions } = req.body;
-        
-        const prompt = `You are a South African legal AI drafting assistant. 
-        Draft a legal document based on the following instructions. 
-        
-        Matter: ${matter || 'General'}
-        Firm Voice: ${firm_voice || 'Standard'}
-        Instructions: ${instructions || 'Draft a standard legal document.'}
-        
-        Provide a professional, court-ready draft. Include placeholders like [CLIENT NAME] where information is missing.`;
-
+        const prompt = `You are a South African legal AI drafting assistant. Draft a legal document based on the following instructions. Matter: ${matter || 'General'}. Firm Voice: ${firm_voice || 'Standard'}. Instructions: ${instructions || 'Draft a standard legal document.'}. Provide a professional, court-ready draft.`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama3-70b-8192",
-            temperature: 0.3,
+            model: "llama3-70b-8192", temperature: 0.3,
         });
-
-        const draft = chatCompletion.choices[0]?.message?.content;
-        res.status(200).json({ status: 'success', draft: draft });
+        res.status(200).json({ status: 'success', draft: chatCompletion.choices[0]?.message?.content });
     } catch (error) {
-        console.error('Draft Document Error:', error);
         res.status(500).json({ error: 'Failed to generate draft' });
     }
 });
 
-
-// ==========================================
-// --- NEW LUDUS COURTROOM ROUTES ---
-// ==========================================
-
-// 12. LUDUS UPLOAD ROUTE
+// --- 12. LUDUS UPLOAD ROUTE ---
 app.post('/api/upload', upload.single('document'), async (req, res) => {
-    console.log("Ludus upload route hit!");
     try {
-        if (!req.file) {
-            return res.status(400).json({ error: "No file uploaded. Make sure the FormData key is 'document'." });
-        }
+        if (!req.file) return res.status(400).json({ error: "No file uploaded." });
         const pdfData = await pdfParse(req.file.buffer);
-        const extractedText = pdfData.text;
-        
-        res.json({ 
-            success: true, 
-            message: "Document parsed successfully",
-            text: extractedText.substring(0, 5000)
-        });
+        res.json({ success: true, message: "Document parsed", text: pdfData.text.substring(0, 5000) });
     } catch (error) {
-        console.error("PDF Parse Error:", error);
         res.status(500).json({ error: "Failed to parse document." });
     }
 });
 
-// 13. LUDUS COURTROOM ARGUE ROUTE (AI Judge)
+// --- 13. LUDUS COURTROOM ARGUE ROUTE ---
 app.post('/api/courtroom/argue', async (req, res) => {
-    console.log("Ludus courtroom route hit!");
     try {
         const { argument, caseContext } = req.body;
+        if (!argument) return res.status(400).json({ error: "No argument provided." });
 
-        if (!argument) {
-            return res.status(400).json({ error: "No argument provided." });
-        }
-
-        const systemPrompt = `You are Justice Ludus, a strict, analytical High Court Judge. You are presiding over a virtual simulation. The user is an attorney. Be formal and demanding. Case Context: ${caseContext || "None"}`;
-
+        const systemPrompt = `You are Justice Ludus, a strict, analytical High Court Judge. Be formal and demanding. Case Context: ${caseContext || "None"}`;
         const chatCompletion = await groq.chat.completions.create({
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: argument }
-            ],
+            messages: [{ role: "system", content: systemPrompt }, { role: "user", content: argument }],
             model: "llama3-8b-8192", 
         });
 
@@ -276,13 +240,10 @@ app.post('/api/courtroom/argue', async (req, res) => {
             reply: chatCompletion.choices[0]?.message?.content,
             scores: { reasoning: 85, authority: 90, responsiveness: 80 } 
         });
-
     } catch (error) {
-        console.error("Groq API Error:", error);
         res.status(500).json({ error: "The Judge is currently in recess." });
     }
 });
-
 
 // --- HEALTH CHECK & START ---
 app.get('/', (req, res) => {
