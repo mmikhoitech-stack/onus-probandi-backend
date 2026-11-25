@@ -8,6 +8,7 @@ const { Readable } = require('stream');
 const { Resend } = require('resend');
 const { createClient } = require('@supabase/supabase-js');
 const OpenAI = require('openai');
+const pdfParse = require('pdf-parse'); // ADDED FOR LUDUS
 
 const app = express();
 app.use(cors());
@@ -224,9 +225,68 @@ app.post('/api/draft-document', async (req, res) => {
     }
 });
 
+
+// ==========================================
+// --- NEW LUDUS COURTROOM ROUTES ---
+// ==========================================
+
+// 12. LUDUS UPLOAD ROUTE
+app.post('/api/upload', upload.single('document'), async (req, res) => {
+    console.log("Ludus upload route hit!");
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: "No file uploaded. Make sure the FormData key is 'document'." });
+        }
+        const pdfData = await pdfParse(req.file.buffer);
+        const extractedText = pdfData.text;
+        
+        res.json({ 
+            success: true, 
+            message: "Document parsed successfully",
+            text: extractedText.substring(0, 5000)
+        });
+    } catch (error) {
+        console.error("PDF Parse Error:", error);
+        res.status(500).json({ error: "Failed to parse document." });
+    }
+});
+
+// 13. LUDUS COURTROOM ARGUE ROUTE (AI Judge)
+app.post('/api/courtroom/argue', async (req, res) => {
+    console.log("Ludus courtroom route hit!");
+    try {
+        const { argument, caseContext } = req.body;
+
+        if (!argument) {
+            return res.status(400).json({ error: "No argument provided." });
+        }
+
+        const systemPrompt = `You are Justice Ludus, a strict, analytical High Court Judge. You are presiding over a virtual simulation. The user is an attorney. Be formal and demanding. Case Context: ${caseContext || "None"}`;
+
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: argument }
+            ],
+            model: "llama3-8b-8192", 
+        });
+
+        res.json({ 
+            success: true, 
+            reply: chatCompletion.choices[0]?.message?.content,
+            scores: { reasoning: 85, authority: 90, responsiveness: 80 } 
+        });
+
+    } catch (error) {
+        console.error("Groq API Error:", error);
+        res.status(500).json({ error: "The Judge is currently in recess." });
+    }
+});
+
+
 // --- HEALTH CHECK & START ---
 app.get('/', (req, res) => {
-    res.status(200).json({ status: 'success', message: 'Onus Probandi API is running.' });
+    res.status(200).json({ status: 'success', message: 'Onus Probandi & Ludus API is running.' });
 });
 
 app.listen(port, '0.0.0.0', () => {
