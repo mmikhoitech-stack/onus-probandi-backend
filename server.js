@@ -39,6 +39,7 @@ app.post('/api/send-email', async (req, res) => {
         });
         res.status(200).json({ status: 'success', message: 'Email sent' });
     } catch (error) {
+        console.error("Email Error:", error);
         res.status(500).json({ error: 'Failed to send email' });
     }
 });
@@ -63,6 +64,7 @@ app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
         doc.font('Times-Roman').fontSize(12).text(transcription.text, { align: 'left', lineGap: 5 });
         doc.end();
     } catch (error) {
+        console.error("Audio Error:", error);
         if (!res.headersSent) res.status(500).json({ error: 'Failed to process audio' });
     }
 });
@@ -74,11 +76,12 @@ app.post('/api/tabular-review', async (req, res) => {
         const prompt = `Analyze these documents and extract: ${JSON.stringify(columns)}. Return ONLY a JSON array. Documents: ${documents.join('\n\n')}`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama3-70b-8192", temperature: 0.1,
+            model: "llama-3.3-70b-versatile", temperature: 0.1,
         });
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
         res.status(200).json({ status: 'success', table_data: JSON.parse(rawResponse) });
     } catch (error) {
+        console.error("Tabular Error:", error);
         res.status(500).json({ error: 'Failed to process tabular review' });
     }
 });
@@ -90,11 +93,12 @@ app.post('/api/agent-intake', async (req, res) => {
         const prompt = `Read this request: "${request_text}". Return ONLY JSON with keys: "priority" (High/Medium/Low), "missing_info" (array), "draft_response" (string).`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama3-70b-8192", temperature: 0.2,
+            model: "llama-3.3-70b-versatile", temperature: 0.2,
         });
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
         res.status(200).json({ status: 'success', intake_result: JSON.parse(rawResponse) });
     } catch (error) {
+        console.error("Intake Error:", error);
         res.status(500).json({ error: 'Failed to process intake' });
     }
 });
@@ -106,11 +110,12 @@ app.post('/api/workflow-draft', async (req, res) => {
         const prompt = `Generate a step-by-step legal workflow for: "${goal}". Return ONLY a JSON array with "step_number" and "instruction".`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama3-70b-8192", temperature: 0.3,
+            model: "llama-3.3-70b-versatile", temperature: 0.3,
         });
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
         res.status(200).json({ status: 'success', workflow: JSON.parse(rawResponse) });
     } catch (error) {
+        console.error("Workflow Error:", error);
         res.status(500).json({ error: 'Failed to generate workflow' });
     }
 });
@@ -128,10 +133,11 @@ app.post('/api/deep-research', async (req, res) => {
         let contextText = documents.map(doc => doc.content).join('\n\n---\n\n') || "No specific SA case law found.";
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "system", content: `Answer ONLY using this context: \n\n${contextText}` }, { role: "user", content: query }],
-            model: "llama3-70b-8192", temperature: 0.2,
+            model: "llama-3.3-70b-versatile", temperature: 0.2,
         });
         res.status(200).json({ status: 'success', answer: chatCompletion.choices[0]?.message?.content, sources_used: documents.map(d => d.metadata) });
     } catch (error) {
+        console.error("Research Error:", error);
         res.status(500).json({ error: 'Failed to process deep research' });
     }
 });
@@ -146,6 +152,7 @@ app.post('/api/verify-citation', async (req, res) => {
         if (cases[0].metadata?.status === 'overruled') return res.status(200).json({ status: 'flagged', reason: 'Case is overruled.' });
         res.status(200).json({ status: 'verified', reason: 'Citation exists and is good law.', case_name: cases[0].metadata?.case_name });
     } catch (error) {
+        console.error("Verity Error:", error);
         res.status(500).json({ error: 'Failed to audit citation' });
     }
 });
@@ -165,6 +172,7 @@ app.post('/api/vault/upload', upload.single('document'), async (req, res) => {
         if (error) throw error;
         res.status(200).json({ status: 'success', message: 'Document added to Vault', id: data[0].id });
     } catch (error) {
+        console.error("Vault Error:", error);
         res.status(500).json({ error: 'Failed to upload to Vault' });
     }
 });
@@ -193,6 +201,7 @@ app.post('/api/memory/style', async (req, res) => {
         if (error) throw error;
         res.status(200).json({ status: 'success', message: 'Drafting style saved.' });
     } catch (error) {
+        console.error("Memory Error:", error);
         res.status(500).json({ error: 'Failed to save style' });
     }
 });
@@ -204,10 +213,11 @@ app.post('/api/draft-document', async (req, res) => {
         const prompt = `You are a South African legal AI drafting assistant. Draft a legal document based on the following instructions. Matter: ${matter || 'General'}. Firm Voice: ${firm_voice || 'Standard'}. Instructions: ${instructions || 'Draft a standard legal document.'}. Provide a professional, court-ready draft.`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama3-70b-8192", temperature: 0.3,
+            model: "llama-3.3-70b-versatile", temperature: 0.3,
         });
         res.status(200).json({ status: 'success', draft: chatCompletion.choices[0]?.message?.content });
     } catch (error) {
+        console.error("Draft Error:", error);
         res.status(500).json({ error: 'Failed to generate draft' });
     }
 });
@@ -219,6 +229,7 @@ app.post('/api/upload', upload.single('document'), async (req, res) => {
         const pdfData = await pdfParse(req.file.buffer);
         res.json({ success: true, message: "Document parsed", text: pdfData.text.substring(0, 5000) });
     } catch (error) {
+        console.error("Ludus Upload Error:", error);
         res.status(500).json({ error: "Failed to parse document." });
     }
 });
@@ -230,9 +241,11 @@ app.post('/api/courtroom/argue', async (req, res) => {
         if (!argument) return res.status(400).json({ error: "No argument provided." });
 
         const systemPrompt = `You are Justice Ludus, a strict, analytical High Court Judge. Be formal and demanding. Case Context: ${caseContext || "None"}`;
+        
+        // USE THE NEW FAST MODEL HERE
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "system", content: systemPrompt }, { role: "user", content: argument }],
-            model: "llama3-8b-8192", 
+            model: "llama-3.1-8b-instant", 
         });
 
         res.json({ 
@@ -241,7 +254,8 @@ app.post('/api/courtroom/argue', async (req, res) => {
             scores: { reasoning: 85, authority: 90, responsiveness: 80 } 
         });
     } catch (error) {
-        res.status(500).json({ error: "The Judge is currently in recess." });
+        console.error("Groq API Error:", error); // This will now print the REAL error to Render logs
+        res.status(500).json({ error: "The Judge is currently in recess.", details: error.message });
     }
 });
 
