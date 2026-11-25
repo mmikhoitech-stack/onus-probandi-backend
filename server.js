@@ -242,10 +242,9 @@ app.post('/api/courtroom/argue', async (req, res) => {
 
         const systemPrompt = `You are Justice Ludus, a strict, analytical High Court Judge. Be formal and demanding. Case Context: ${caseContext || "None"}`;
         
-        // USE THE NEW FAST MODEL HERE
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "system", content: systemPrompt }, { role: "user", content: argument }],
-            model: "llama-3.1-8b-instant", 
+            model: "llama-3.3-70b-versatile", 
         });
 
         res.json({ 
@@ -254,8 +253,11 @@ app.post('/api/courtroom/argue', async (req, res) => {
             scores: { reasoning: 85, authority: 90, responsiveness: 80 } 
         });
     } catch (error) {
-        console.error("Groq API Error:", error); // This will now print the REAL error to Render logs
-        res.status(500).json({ error: "The Judge is currently in recess.", details: error.message });
+        console.error("Groq API Error:", error);
+        res.status(500).json({ 
+            error: "The Judge is currently in recess.", 
+            details: error.message || "Unknown Groq Error" 
+        });
     }
 });
 
