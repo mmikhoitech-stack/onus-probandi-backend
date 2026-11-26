@@ -8,7 +8,7 @@ const { Readable } = require('stream');
 const { Resend } = require('resend');
 const { createClient } = require('@supabase/supabase-js');
 const OpenAI = require('openai');
-const pdfParse = require('pdf-parse'); 
+const pdfParse = require('pdf-parse');
 
 const app = express();
 app.use(cors());
@@ -39,7 +39,6 @@ app.post('/api/send-email', async (req, res) => {
         });
         res.status(200).json({ status: 'success', message: 'Email sent' });
     } catch (error) {
-        console.error("Email Error:", error);
         res.status(500).json({ error: 'Failed to send email' });
     }
 });
@@ -64,7 +63,6 @@ app.post('/api/voice-to-pdf', upload.single('audio'), async (req, res) => {
         doc.font('Times-Roman').fontSize(12).text(transcription.text, { align: 'left', lineGap: 5 });
         doc.end();
     } catch (error) {
-        console.error("Audio Error:", error);
         if (!res.headersSent) res.status(500).json({ error: 'Failed to process audio' });
     }
 });
@@ -76,12 +74,12 @@ app.post('/api/tabular-review', async (req, res) => {
         const prompt = `Analyze these documents and extract: ${JSON.stringify(columns)}. Return ONLY a JSON array. Documents: ${documents.join('\n\n')}`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama-3.3-70b-versatile", temperature: 0.1,
+            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
+            temperature: 0.1,
         });
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
         res.status(200).json({ status: 'success', table_data: JSON.parse(rawResponse) });
     } catch (error) {
-        console.error("Tabular Error:", error);
         res.status(500).json({ error: 'Failed to process tabular review' });
     }
 });
@@ -93,12 +91,12 @@ app.post('/api/agent-intake', async (req, res) => {
         const prompt = `Read this request: "${request_text}". Return ONLY JSON with keys: "priority" (High/Medium/Low), "missing_info" (array), "draft_response" (string).`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama-3.3-70b-versatile", temperature: 0.2,
+            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
+            temperature: 0.2,
         });
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
         res.status(200).json({ status: 'success', intake_result: JSON.parse(rawResponse) });
     } catch (error) {
-        console.error("Intake Error:", error);
         res.status(500).json({ error: 'Failed to process intake' });
     }
 });
@@ -110,12 +108,12 @@ app.post('/api/workflow-draft', async (req, res) => {
         const prompt = `Generate a step-by-step legal workflow for: "${goal}". Return ONLY a JSON array with "step_number" and "instruction".`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama-3.3-70b-versatile", temperature: 0.3,
+            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
+            temperature: 0.3,
         });
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
         res.status(200).json({ status: 'success', workflow: JSON.parse(rawResponse) });
     } catch (error) {
-        console.error("Workflow Error:", error);
         res.status(500).json({ error: 'Failed to generate workflow' });
     }
 });
@@ -133,11 +131,11 @@ app.post('/api/deep-research', async (req, res) => {
         let contextText = documents.map(doc => doc.content).join('\n\n---\n\n') || "No specific SA case law found.";
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "system", content: `Answer ONLY using this context: \n\n${contextText}` }, { role: "user", content: query }],
-            model: "llama-3.3-70b-versatile", temperature: 0.2,
+            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
+            temperature: 0.2,
         });
         res.status(200).json({ status: 'success', answer: chatCompletion.choices[0]?.message?.content, sources_used: documents.map(d => d.metadata) });
     } catch (error) {
-        console.error("Research Error:", error);
         res.status(500).json({ error: 'Failed to process deep research' });
     }
 });
@@ -152,7 +150,6 @@ app.post('/api/verify-citation', async (req, res) => {
         if (cases[0].metadata?.status === 'overruled') return res.status(200).json({ status: 'flagged', reason: 'Case is overruled.' });
         res.status(200).json({ status: 'verified', reason: 'Citation exists and is good law.', case_name: cases[0].metadata?.case_name });
     } catch (error) {
-        console.error("Verity Error:", error);
         res.status(500).json({ error: 'Failed to audit citation' });
     }
 });
@@ -162,7 +159,15 @@ app.post('/api/vault/upload', upload.single('document'), async (req, res) => {
     try {
         if (!supabase || !openai) return res.status(500).json({ error: 'Database/OpenAI not configured.' });
         if (!req.file) return res.status(400).json({ error: 'No document uploaded' });
-        const textContent = req.file.buffer.toString('utf-8');
+        
+        let textContent = '';
+        if (req.file.mimetype === 'application/pdf') {
+            const pdfData = await pdfParse(req.file.buffer);
+            textContent = pdfData.text;
+        } else {
+            textContent = req.file.buffer.toString('utf-8');
+        }
+
         const embeddingResponse = await openai.embeddings.create({ model: "text-embedding-3-small", input: textContent });
         const { data, error } = await supabase.from('legal_documents').insert([{
             content: textContent,
@@ -172,7 +177,6 @@ app.post('/api/vault/upload', upload.single('document'), async (req, res) => {
         if (error) throw error;
         res.status(200).json({ status: 'success', message: 'Document added to Vault', id: data[0].id });
     } catch (error) {
-        console.error("Vault Error:", error);
         res.status(500).json({ error: 'Failed to upload to Vault' });
     }
 });
@@ -201,69 +205,41 @@ app.post('/api/memory/style', async (req, res) => {
         if (error) throw error;
         res.status(200).json({ status: 'success', message: 'Drafting style saved.' });
     } catch (error) {
-        console.error("Memory Error:", error);
         res.status(500).json({ error: 'Failed to save style' });
     }
 });
 
-// --- 11. DRAFT DOCUMENT ---
+// --- 11. DRAFT DOCUMENT (COURTROOM / GENERAL DRAFTING) ---
 app.post('/api/draft-document', async (req, res) => {
     try {
         const { matter, firm_voice, instructions } = req.body;
-        const prompt = `You are a South African legal AI drafting assistant. Draft a legal document based on the following instructions. Matter: ${matter || 'General'}. Firm Voice: ${firm_voice || 'Standard'}. Instructions: ${instructions || 'Draft a standard legal document.'}. Provide a professional, court-ready draft.`;
+        
+        const prompt = `You are a South African legal AI drafting assistant. 
+        Draft a legal document based on the following instructions. 
+        
+        Matter: ${matter || 'General'}
+        Firm Voice: ${firm_voice || 'Standard'}
+        Instructions: ${instructions || 'Draft a standard legal document.'}
+        
+        Provide a professional, court-ready draft. Include placeholders like [CLIENT NAME] where information is missing.`;
+
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "llama-3.3-70b-versatile", temperature: 0.3,
+            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
+            temperature: 0.3,
         });
-        res.status(200).json({ status: 'success', draft: chatCompletion.choices[0]?.message?.content });
+
+        const draft = chatCompletion.choices[0]?.message?.content;
+        res.status(200).json({ status: 'success', draft: draft });
     } catch (error) {
-        console.error("Draft Error:", error);
+        console.error('Draft Document Error:', error);
         res.status(500).json({ error: 'Failed to generate draft' });
-    }
-});
-
-// --- 12. LUDUS UPLOAD ROUTE ---
-app.post('/api/upload', upload.single('document'), async (req, res) => {
-    try {
-        if (!req.file) return res.status(400).json({ error: "No file uploaded." });
-        const pdfData = await pdfParse(req.file.buffer);
-        res.json({ success: true, message: "Document parsed", text: pdfData.text.substring(0, 5000) });
-    } catch (error) {
-        console.error("Ludus Upload Error:", error);
-        res.status(500).json({ error: "Failed to parse document." });
-    }
-});
-
-// --- 13. LUDUS COURTROOM ARGUE ROUTE ---
-app.post('/api/courtroom/argue', async (req, res) => {
-    try {
-        const { argument, caseContext } = req.body;
-        if (!argument) return res.status(400).json({ error: "No argument provided." });
-
-        const systemPrompt = `You are Justice Ludus, a strict, analytical High Court Judge. Be formal and demanding. Case Context: ${caseContext || "None"}`;
-        
-        const chatCompletion = await groq.chat.completions.create({
-            messages: [{ role: "system", content: systemPrompt }, { role: "user", content: argument }],
-            model: "llama-3.3-70b-versatile", 
-        });
-
-        res.json({ 
-            success: true, 
-            reply: chatCompletion.choices[0]?.message?.content,
-            scores: { reasoning: 85, authority: 90, responsiveness: 80 } 
-        });
-    } catch (error) {
-        console.error("Groq API Error:", error);
-        res.status(500).json({ 
-            error: "The Judge is currently in recess.", 
-            details: error.message || "Unknown Groq Error" 
-        });
     }
 });
 
 // --- HEALTH CHECK & START ---
 app.get('/', (req, res) => {
-    res.status(200).json({ status: 'success', message: 'Onus Probandi & Ludus API is running.' });
+    res.status(200).json({ status: 'success', message: 'Onus Probandi API is running.' });
 });
 
 app.listen(port, '0.0.0.0', () => {
