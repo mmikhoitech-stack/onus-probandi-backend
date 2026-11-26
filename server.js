@@ -74,7 +74,7 @@ app.post('/api/tabular-review', async (req, res) => {
         const prompt = `Analyze these documents and extract: ${JSON.stringify(columns)}. Return ONLY a JSON array. Documents: ${documents.join('\n\n')}`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
+            model: "openai/gpt-oss-120b",
             temperature: 0.1,
         });
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -91,7 +91,7 @@ app.post('/api/agent-intake', async (req, res) => {
         const prompt = `Read this request: "${request_text}". Return ONLY JSON with keys: "priority" (High/Medium/Low), "missing_info" (array), "draft_response" (string).`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
+            model: "openai/gpt-oss-120b",
             temperature: 0.2,
         });
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -108,7 +108,7 @@ app.post('/api/workflow-draft', async (req, res) => {
         const prompt = `Generate a step-by-step legal workflow for: "${goal}". Return ONLY a JSON array with "step_number" and "instruction".`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
+            model: "openai/gpt-oss-120b",
             temperature: 0.3,
         });
         let rawResponse = chatCompletion.choices[0]?.message?.content.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -131,7 +131,7 @@ app.post('/api/deep-research', async (req, res) => {
         let contextText = documents.map(doc => doc.content).join('\n\n---\n\n') || "No specific SA case law found.";
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "system", content: `Answer ONLY using this context: \n\n${contextText}` }, { role: "user", content: query }],
-            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
+            model: "openai/gpt-oss-120b",
             temperature: 0.2,
         });
         res.status(200).json({ status: 'success', answer: chatCompletion.choices[0]?.message?.content, sources_used: documents.map(d => d.metadata) });
@@ -154,10 +154,10 @@ app.post('/api/verify-citation', async (req, res) => {
     }
 });
 
-// --- 8. THE VAULT (UPLOAD & INDEX DOCUMENTS) ---
-app.post('/api/vault/upload', upload.single('document'), async (req, res) => {
+// --- 8. THE VAULT / UPLOAD ROUTE ---
+// Added multiple endpoint names in case Hostinger is calling a specific one
+app.post(['/api/vault/upload', '/api/upload', '/api/courtroom/upload'], upload.single('document'), async (req, res) => {
     try {
-        if (!supabase || !openai) return res.status(500).json({ error: 'Database/OpenAI not configured.' });
         if (!req.file) return res.status(400).json({ error: 'No document uploaded' });
         
         let textContent = '';
@@ -168,16 +168,21 @@ app.post('/api/vault/upload', upload.single('document'), async (req, res) => {
             textContent = req.file.buffer.toString('utf-8');
         }
 
-        const embeddingResponse = await openai.embeddings.create({ model: "text-embedding-3-small", input: textContent });
-        const { data, error } = await supabase.from('legal_documents').insert([{
-            content: textContent,
-            metadata: { filename: req.file.originalname, type: 'vault_upload', date: new Date() },
-            embedding: embeddingResponse.data[0].embedding
-        }]);
-        if (error) throw error;
-        res.status(200).json({ status: 'success', message: 'Document added to Vault', id: data[0].id });
+        // If Supabase is configured, save it to the vector database
+        if (supabase && openai) {
+            const embeddingResponse = await openai.embeddings.create({ model: "text-embedding-3-small", input: textContent });
+            await supabase.from('legal_documents').insert([{
+                content: textContent,
+                metadata: { filename: req.file.originalname, type: 'courtroom_upload', date: new Date() },
+                embedding: embeddingResponse.data[0].embedding
+            }]);
+        }
+
+        // Return the parsed text so the Courtroom UI can display "Document parsed"
+        res.status(200).json({ status: 'success', message: 'Document parsed', text: textContent });
     } catch (error) {
-        res.status(500).json({ error: 'Failed to upload to Vault' });
+        console.error("Upload Error:", error);
+        res.status(500).json({ error: 'Failed to process document' });
     }
 });
 
@@ -209,31 +214,27 @@ app.post('/api/memory/style', async (req, res) => {
     }
 });
 
-// --- 11. DRAFT DOCUMENT (COURTROOM / GENERAL DRAFTING) ---
-app.post('/api/draft-document', async (req, res) => {
+// --- 11. COURTROOM RESPONSE (AI JUDGE) ---
+app.post('/api/courtroom/respond', async (req, res) => {
     try {
-        const { matter, firm_voice, instructions } = req.body;
+        const { argument } = req.body;
         
-        const prompt = `You are a South African legal AI drafting assistant. 
-        Draft a legal document based on the following instructions. 
-        
-        Matter: ${matter || 'General'}
-        Firm Voice: ${firm_voice || 'Standard'}
-        Instructions: ${instructions || 'Draft a standard legal document.'}
-        
-        Provide a professional, court-ready draft. Include placeholders like [CLIENT NAME] where information is missing.`;
+        const prompt = `You are a strict, highly knowledgeable South African High Court Judge. 
+        Counsel has just presented the following argument to you: "${argument}".
+        Respond as the Judge. You may ask a clarifying question, challenge the counsel on a point of law, or rule on the matter. 
+        Keep your response authoritative, professional, and brief (under 100 words).`;
 
         const chatCompletion = await groq.chat.completions.create({
             messages: [{ role: "user", content: prompt }],
-            model: "openai/gpt-oss-120b", // ✅ FIXED MODEL
-            temperature: 0.3,
+            model: "openai/gpt-oss-120b",
+            temperature: 0.6,
         });
 
-        const draft = chatCompletion.choices[0]?.message?.content;
-        res.status(200).json({ status: 'success', draft: draft });
+        const judgeResponse = chatCompletion.choices[0]?.message?.content;
+        res.status(200).json({ status: 'success', judge_response: judgeResponse });
     } catch (error) {
-        console.error('Draft Document Error:', error);
-        res.status(500).json({ error: 'Failed to generate draft' });
+        console.error('Courtroom Error:', error);
+        res.status(500).json({ error: 'The Judge is currently in recess.' });
     }
 });
 
